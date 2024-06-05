@@ -1,0 +1,334 @@
+---
+title: "2V_01_Fig1_SpatialOverview"
+author: "DanielZucha"
+date: "2024-05-09"
+output: html_document
+---
+
+Hello, 
+
+In this markdown we prepare the descriptive plots for out study focusing on the first week after the ischemic insult. First, we load the 3D MRI projections to see the lesion sizes and compute summary statistics determine the signficance of differences between lesion sizes. Having the spatial transcriptomics data, we look at the UMAP and clustering annotation being in line with brain's anatomy. This is best visualized with Spatial plots. The lesions introduce severe injury, which can be seen by decreased gene count or umi counts. But the genes found in the lesions show interesting time discrepancies, hinting at difference in lesion temporal resolution. This is well visible using the UpSet plot.
+
+
+Input files:
+- "data/seurat_spatial_integrated_ready.Rds" # Processed spatial data saved as Seurat object
+- "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx" # an excel sheet containing the statistics on differential gene expression for each brain region separately.
+
+```{r libraries}
+# daily libraries
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(openxlsx)
+library(magrittr)
+library(stringr)
+library(patchwork)
+
+# image processing
+library(magick)
+library(grid)
+
+# list overlaps
+library(UpSetR)
+
+# plotting
+library(ggrepel)
+
+# sourcing custom functions and color palettes
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+# ws
+if(!dir.exists("ws")){dir.create("ws")
+  ws <- "ws"}else{ws <- "ws"}
+
+# lists
+plot.list <- list()
+result.list <- list()
+```
+
+load data
+```{r load data}
+# spatial seurat processed with a standardized seurat pipeline
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds")
+DefaultAssay(spatial.seurat) <- "Spatial"
+
+# list of differentially expressed genes.
+markers <- read_all_sheets(file = file.path(ws, "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx"))
+
+# misc 
+sections <- c("Ctrl", "1DPI", "3DPI", "7DPI")
+ctx_regions <- c("CTX1-4", "CTX5", "CTX6", "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p")
+```
+
+=== Main Figures ===
+
+Experimental design overview.
+```{r load exp design image}
+require(imager)
+# the image is not ready yet
+
+plot.list[["ExpDesign"]] <- ggplot() + 
+  theme_void()
+```
+
+MRI results. Previous to performing surgeries, the mice underwent an MRI screening to determine the lesion size, so we could select the more representative per timepoint.
+```{r MRI}
+mri.data <- data.frame(
+  "mcao" = rep(c('1DPI', '3DPI', '7DPI'), each = 5) %>% factor(levels = c('1DPI', '3DPI', '7DPI')),
+  "VolLesion" = c(2.846, 1.886, 9.082, 23.26, 8.054, # D1; lesion volume in mm3
+                  7.933, 5.935, 10.354, 12.747, 14.932, # D3
+                  1.841, 0.633, 2.345, 3.049, 1.875 # D7
+                  ))
+
+# Kruskal test if lesion volume changes with time
+mri.data %>% kruskal.test(VolLesion ~ mcao) 
+
+# pairwise comparisons
+p.values <- pairwise.wilcox.test(x = mri.data$VolLesion, 
+                     g = mri.data$mcao, 
+                     p.adjust.method = "BH", 
+                     paired = F)
+
+# summarise the lesion values
+mri.summary <- mri.data %>% 
+  group_by(mcao) %>% 
+  summarise(VolSD = sd(VolLesion),
+            VolLesion = mean(VolLesion))
+
+# include the signif comparison in the plot
+signif_label = paste0("P = ", round(p.values$p.value["7DPI", "3DPI"], 3))
+
+# plot
+plot.list[["Barplot_MRI"]] <- ggplot(data = mri.data, aes(y = VolLesion, x = mcao)) + 
+  geom_bar(data = mri.summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = 'orange', size = 0.5) +
+  geom_errorbar(data =  mri.summary, aes(ymin = VolLesion-VolSD, ymax = VolLesion+VolSD), width = 0.1, color = "black", size = 0.5) +
+  geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
+  annotate(geom = "text", x = 2.5, y = 21, label = signif_label, vjust = -0.5, hjust = 0.5, size = 2.45) +
+  annotate(geom = "segment", x = 2, xend = 3, y = 20, yend = 20, color = "black") +
+  ylim(0, 25) +
+  xlab(NULL) + 
+  ylab(expression(paste("Lesion Volume [",mm^3, "]"))) +
+  theme_mk + 
+  remove_grid + 
+  theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
+
+print(plot.list[["Barplot_MRI"]])
+
+# load the 3D MRI images
+
+## use magick to load the compressed bmp file
+plot.list[["MRI_3D"]] <- magick::image_read(file.path(ws, "MontageAnimal03_512sB.bmp")) %>% as.raster() %>% rasterGrob()
+
+plot.list[["MRI"]] <- wrap_plots(plot.list[c("MRI_3D", "Barplot_MRI")], 
+                                 ncol = 4, design = "AAAB", )
+print(plot.list[["MRI"]])
+```
+
+Having processed and annotated the data, we can look at their annotation. First at the clusters in the UMAP.
+```{r UMAP}
+## grey-red cluster colors
+plot.list[["UMAP_Spatial"]] <- spatial.seurat %>% DimPlot(
+  reduction = "umap",
+  group.by = "DetailedRegionAnnoShort",
+  cols = col.list$cols_mono_short,
+  shuffle = T,
+  pt.size = 0.35,
+  label = T,
+  label.size = 2,
+  label.box = T,
+  repel = T
+) +
+  ggtitle(NULL) +
+  theme_mk +
+  remove_grid +
+  NoAxes() +
+  NoLegend() +
+  theme(panel.border = element_blank())
+
+print(plot.list[["UMAP_Spatial"]])
+```
+
+And then the spatial layout of the clusters.
+```{r Spatial Plot Brain Regions}
+plot.list[["Spatial"]] <- spatial.seurat %>% SpatialPlot(
+  group.by = "DetailedRegionAnnoShort",
+  cols = col.list$cols_mono_short,
+  images = sections,
+  image.alpha = 0,
+  crop = T,
+  ncol = 4,
+  pt.size.factor = 2,
+  alpha = 1,
+  stroke = 0
+) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  NoLegend() &
+  theme(panel.border = element_blank())
+
+print(plot.list[["Spatial"]])
+```
+
+No. of genes present in the cortical areas
+```{r VlnPlot median nFeature}
+# statistical test to compare nFeatures in Cortex vs Lesion
+md <- spatial.seurat@meta.data %>% 
+  select(nFeature_Spatial, BrainAreas, DetailedRegionAnnoShort) %>% 
+  filter(DetailedRegionAnnoShort %in% ctx_regions)
+
+t.test(nFeature_Spatial ~ BrainAreas, data = md)
+
+# plot
+main_plot <- spatial.seurat %>% enh_vlnplot(
+  feature = "nFeature_Spatial",
+  grouping = "DetailedRegionAnnoShort",
+  colors = col.list$cols_mono_short,
+  compare_means = F,
+  idents = ctx_regions
+) +
+  theme_mk +
+  remove_grid +
+  NoLegend() +
+  ggtitle(NULL) +
+  ylab("Gene Count") +
+  theme(
+    panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey")
+    ) + 
+  annotate("text", x = 6, y = 9000, label = expression("P < 2 x 10"^-16), vjust = 0, hjust = 0, size = 2.45) # add t.test statistic
+
+# add explanatory variables above
+ann_plot <- md %>% ggplot(aes(DetailedRegionAnnoShort, nFeature_Spatial)) +
+  geom_violin() + 
+  ylim(0, 1) + 
+  annotate("text", x = 2, y = 0.5, label = "Intact Cortex", vjust = 0.5, hjust = 0.5, size = 2.45) + 
+  annotate("segment", x = 0.5, xend = 3.45, y = 0.1, yend = 0.1, color = "grey", linewidth = 2) + 
+  annotate("text", x = 6.5, y = 0.5, label = "Lesion", vjust = 0.5, hjust = 0.5, size = 2.45) + 
+  annotate("segment", x = 3.55, xend = 9.5, y = 0.1, yend = 0.1, color = "#AF3039", linewidth = 2) + 
+  theme_void() & NoAxes()
+
+plot.list[["VlnPlot_nFeature"]] <- (ann_plot / main_plot) + plot_layout(heights = c(1,10))
+print(plot.list[["VlnPlot_nFeature"]])
+
+rm(main_plot, md, ann_plot)
+```
+
+Markers, the genes for which the gene expression significantly changed by 50 % (fold change = 1.5 -> log2FC = 0.58). We use them as a marker of the brain regions and further discuss their role.
+```{r upregulated markers}
+# upregulated genes per region
+result.list[["markers_up"]] <- lapply(markers, \(sheet){
+  sheet %>% filter(avg_log2FC > 0)
+})
+
+# add this information to the spatial seurat
+deg_df <- result.list$markers_up %>% 
+  map(nrow) %>% 
+  unlist %>% 
+  data.frame(DetailedRegionAnnoShort = names(.), 
+             Region_DEG_count = ., 
+             stringsAsFactors = FALSE)
+
+spatial.seurat@meta.data %<>% left_join(deg_df, by = "DetailedRegionAnnoShort")
+rownames(spatial.seurat@meta.data) <- spatial.seurat@meta.data$Barcodes # have to add rownames back as they are removed after left_join
+
+# plot
+spatial.seurat %>% SpatialPlot(
+  features = "Region_DEG_count", 
+  images = sections, 
+  image.alpha = 0, 
+  pt.size.factor = 2, 
+  stroke = 0, 
+  crop = T
+) & 
+  theme_mk & 
+  NoAxes() & 
+  ggtitle(NULL) &
+  theme(
+    legend.position = "none", 
+    panel.border = element_blank()) &
+  remove_grid & 
+  viridis::scale_fill_viridis(
+        option = 'rocket', 
+        direction = -1)
+```
+
+UpSet plot allows to highlight temporal conservation of markers in the lesion, and inversely delineate what genes become expressed in a particular timepoint or area.
+```{r UpSet plot markers}
+# pull marker genes
+temp <- result.list$markers_up %>% lapply(pull, gene)
+
+# UpSet plot for overlaps 
+plot.list[["UpSet_SpatialMarkers_up"]] <-
+  UpSetR::upset(
+    fromList(temp[ctx_regions]),
+    sets = ctx_regions %>% rev,
+    sets.bar.color = col.list[["cols_mono_short"]][ctx_regions] %>% rev,
+    order.by = "freq",
+    keep.order = T,
+    show.numbers = "yes",
+    mb.ratio = c(0.5, 0.5),
+    sets.x.label = "Number of markers",
+    mainbar.y.label = "Size of marker overlap",
+    scale.intersections = "identity"
+  )
+
+print(plot.list[["UpSet_SpatialMarkers_up"]])
+```
+
+```{r downregulated markers}
+# downregulated genes per region
+result.list[["markers_down"]]  <- lapply(markers, \(sheet){
+  sheet %>% filter(avg_log2FC < 0)
+})
+
+# pull marker genes
+temp <- result.list$markers_down %>% lapply(pull, gene)
+
+plot.list[["UpSet_SpatialMarkers_down"]] <-
+  UpSetR::upset(
+    fromList(temp[ctx_regions]),
+    sets = ctx_regions %>% rev,
+    sets.bar.color = col.list[["cols_mono_short"]][ctx_regions] %>% rev,
+    order.by = "freq",
+    keep.order = T,
+    show.numbers = "yes",
+    mb.ratio = c(0.5, 0.5),
+    sets.x.label = "Number of markers",
+    mainbar.y.label = "Size of marker overlap",
+    scale.intersections = "identity"
+  )
+print(plot.list[["UpSet_SpatialMarkers_down"]])
+```
+
+Patchworking the figure 1
+```{r patchwork fig 1, fig.width=12, fig.height=20, dpi=500}
+# initialize empty plots
+plot.list[["BlankPlot"]] <- patchwork::plot_spacer()
+
+plot.list[["Fig1"]] <- patchwork::wrap_plots(plot.list[c(
+  "ExpDesign", # A
+  "MRI", # B
+  "UMAP_Spatial", # C
+  "Spatial", # D
+  "VlnPlot_nFeature", # E
+  "BlankPlot" # F
+)],
+ncol = 3,
+byrow = T,
+design = "ABB
+          CDD
+          EFF")
+
+print(plot.list[["Fig1"]])
+
+plot.list[["Fig1"]] %>% ggsave_tiff(ws_location = ws, plotname = "WrapPlot_Figure1", height = 20, 25)
+```
+
+
+=== Supp Figures ===
+
+Plots with supportive role.
+

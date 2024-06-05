@@ -1,0 +1,740 @@
+---
+title: "MCAO_DEGs_and_GeneOntology"
+author: "Daniel Zucha"
+date: "2023-06-04"
+output: html_document
+---
+
+Markdown for the differential gene expression and Gene Ontology analysis of the integrated spatial dataset. 
+
+Essential input files:
+  - Rds: "seurat_spatial_integrated_ready.Rds"
+
+
+=== Essential chunks, load every time before running parts of the script. ===
+
+```{r libraries}
+# daily libraries
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(openxlsx)
+library(magrittr)
+library(stringr)
+library(patchwork)
+
+# sourcing custom functions and color palettes
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+# ws
+if(!dir.exists("ws")){dir.create("ws")
+  ws <- "ws"}else{ws <- "ws"}
+
+# lists
+plot.list <- list()
+result.list <- list()
+```
+
+```{r load seurat data}
+# spatial seurat
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds")
+spatial.seurat %<>% SetIdent(value = "DetailedRegionAnnoShort")
+DefaultAssay(spatial.seurat) <- "Spatial"
+
+sections <- c("Ctrl", "1DPI", "3DPI", "7DPI")
+isch.regions <- c("ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p")
+```
+
+=== Descriptive ===
+
+Area sizes, UMI count and gene count
+```{r basic metrics}
+spatial.seurat %>% VlnPlot(features = c('nCount_Spatial', 'nFeature_Spatial'))
+
+D1spatial <- spatial.seurat %>% subset(subset = Condition == 'D1') %>% .[[c("nCount_Spatial", "nFeature_Spatial")]]; 
+D1spatial %>% apply(2, median); paste0("No of spots is: ", D1spatial %>% nrow) ## no of spots
+
+D3spatial <- spatial.seurat %>% subset(subset = Condition == 'D3') %>% .[[c("nCount_Spatial", "nFeature_Spatial")]]; D3spatial %>% apply(2, median)
+paste0("No of spots is: ", D3spatial %>% nrow) ## no of spots
+
+D7spatial <- spatial.seurat %>% subset(subset = Condition == 'D7') %>% .[[c("nCount_Spatial", "nFeature_Spatial")]]; D7spatial %>% apply(2, median)
+paste0("No of spots is: ", D7spatial %>% nrow) ## no of spots
+
+```
+
+Stacked barplot for the lesion area size
+```{r Lesion size BarPlot}
+df <- sapply(sections, function(i){
+  ctx.regions <- c("CS", "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p", "CTX1-4", "CTX5", "CTX6", "lCTX4-5", "lCTX6", "PIR")
+  les.regions.peri <- c("ISD1p", "ISD3p", "ISD7p")
+  les.regions.cent <- c("ISD1c", "ISD3c", "ISD7c")
+  ctx.cells <- spatial.seurat %>% subset(subset = Condition == i) %>% subset(subset = DetailedRegionAnnoShort %in% ctx.regions) %>% Cells %>% length
+  les.cells.peri <- spatial.seurat %>% subset(subset = Condition == i) %>% subset(subset = DetailedRegionAnnoShort %in% les.regions.peri) %>% Cells %>% length
+  les.cells.cent <- spatial.seurat %>% subset(subset = Condition == i) %>% subset(subset = DetailedRegionAnnoShort %in% les.regions.cent) %>% Cells %>% length
+  ctx.wt.cells <- ctx.cells - les.cells.peri - les.cells.cent
+  return(c(ctx.wt.cells, les.cells.cent, les.cells.peri))
+}); df <- df %>% t %>% as.data.frame() %>% tibble::rownames_to_column(); colnames(df) <- c("Condition", "Intact\ntissue", "Lesion\nCenter", "Lesion\nPeriphery"); df %<>% mutate(Condition = case_when(
+  Condition == "sham" ~ "Ctrl",
+  Condition == "D1" ~ "1DPI",
+  Condition == "D3" ~ "3DPI",
+  Condition == "D7" ~ "7DPI"
+  ) %>% factor(levels = c("Ctrl", "1DPI", "3DPI", "7DPI"))
+  ); df_long <- df %>% tidyr::pivot_longer(df, cols = 2:4, names_to = "Tissue", values_to = "values")
+
+(ggplot(data = df_long, aes(fill = Tissue, y = values, x = Condition, label = values)) + 
+  geom_bar(position = "stack", stat = "identity", width = 0.6, colour = "black", alpha = 0.75) + 
+  geom_text(size = 15, position = position_stack(vjust = 0.5)) +
+  scale_fill_manual(values = c("#C1C0BB", "#F1D2D4", "#AF3039"), labels = c("Intact\nCortex", "Lesion\nCenter", "Lesion\nPeriphery")) + 
+  theme(text = element_text(family = "OpenSans", size = 50), 
+        legend.position = "bottom", 
+        axis.text.x = element_text(face = "bold", vjust = 1, size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.ticks = element_blank(),
+        panel.background = element_blank(), #transparent panel bg
+        plot.background = element_rect(fill='white'), #transparent plot bg
+        plot.margin = unit(c(0.2, 1.5, 0.2, 0.2), "cm"),
+        panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2)) +  
+        xlab("") + ylab("Spot count")) %>% ggsave(filename = file.path(ws, "Barplot_LesionSize.tiff"), device = "tiff", dpi = 300, width = 5, height = 7)
+```
+
+UMAP and Spatial Plots
+```{r UMAP and Spatial plot}
+spatial.seurat %<>% SetIdent(value = "DetailedRegionAnnoShort")
+
+#grey-red cluster colors
+spatial.seurat %>% UMAPPlot(cols = col.list$cols_mono_short)
+spatial.seurat %>% SpatialPlot(crop = F, label = F, image.alpha = 0, stroke = 0.05, cols = col.list$cols_mono_short, images = c('sham', 'D1', 'D3', 'D7')) & NoLegend()
+
+# Spatial Plots which can be saved
+lapply(c('sham', 'D1', 'D3', 'D7'), function(image){
+  spatial.seurat %>% SpatialPlot(crop = F, label = F, pt.size.factor = 1.35, image.alpha = 0, stroke = 0.05, cols = col.list$cols_mono_short, images = image) & NoLegend() -> p
+  print(p)
+  #p %>% ggsave(filename = paste0(ws, "/SpatialPlot_UMAP_", image, ".tiff"), device = 'tiff', dpi = 300, units = "cm", width = 10, height = 10)
+})
+```
+
+Descriptive
+```{r Feature count per cluster VlnPlot}
+roi <- c("CTX1-4", "CTX5", "CTX6", "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p")
+spatial.seurat$Condition %>% table
+
+spatial.seurat[["percent.mt"]] <- PercentageFeatureSet(spatial.seurat, pattern = "mt-")
+spatial.seurat[["percent.rib"]] <- PercentageFeatureSet(spatial.seurat, pattern = "Rpl|Rps")
+
+
+vln.table <- tibble(
+  "nCount" = spatial.seurat$nCount_Spatial,
+  "nFeature" = spatial.seurat$nFeature_Spatial,
+  "percentMT" = spatial.seurat$percent.mt,
+  "percentRIB" = spatial.seurat$percent.rib,
+  "Condition" = spatial.seurat$Condition,
+  "Region" = spatial.seurat$DetailedRegionAnnoShort
+)
+
+## Summary tables
+vln.table %<>% filter(Region %in% roi)
+vln.table.ctrl <- vln.table %>% filter(Region %in% c("CTX1-4", "CTX5", "CTX6")); by(vln.table.ctrl$nFeature, vln.table.ctrl$Condition, summary)
+vln.table.D1 <- vln.table %>% filter(Region %in% c("ISD1c", "ISD1p")); by(vln.table.D1$nFeature, vln.table.D1$Condition, summary)
+vln.table.D3 <- vln.table %>% filter(Region %in% c("ISD3c", "ISD3p")); by(vln.table.D3$nFeature, vln.table.D3$Condition, summary)
+vln.table.D7 <- vln.table %>% filter(Region %in% c("ISD7c", "ISD7p")); by(vln.table.D7$nFeature, vln.table.D7$Condition, summary)
+
+
+by(vln.table$nCount, vln.table$Condition, summary) ## UMI count
+by(vln.table$nFeature, vln.table$Condition, summary) ## gene count
+by(vln.table$percentMT, vln.table$Condition, summary) ## mt content 
+by(vln.table$percentRIB, vln.table$Condition, summary) ## ribosomal content
+
+ggplot(data = vln.table, aes(x = nCount, y = nFeature, color = Condition)) + geom_point(size = 0.5) ## UMI vs genes
+ggplot(data = vln.table, aes(x = nCount, y = percentMT, color = Condition)) + geom_point(size = 0.5) ## UMI vs mito content
+ggplot(data = vln.table, aes(x = nCount, y = percentRIB, color = Condition)) + geom_point(size = 0.5) ## UMI vs ribo
+ggplot(data = vln.table, aes(x = Condition, y = nCount)) + geom_violin() + geom_jitter(position = position_jitter(0.4), size = 0.02, shape = 1) ## UMI per condition
+
+# Violin plot - Gene count per cluster
+VlnPlot(spatial.seurat, 
+        features = "nFeature_Spatial", pt.size = 0, idents = roi,
+        group.by = "DetailedRegionAnnoShort", cols = col.list[["cols_mono_short"]]) & xlab("") & labs(title = "") & ylab("Gene count") & 
+    theme(text = element_text(family = "OpenSans", size = 50), 
+          axis.text = element_text(size = 50),
+          axis.text.x = element_text(angle = 45, hjust = 0.7, vjust = 0.8), 
+          legend.text = element_text(family = "OpenSans"), 
+          axis.ticks = element_blank(),
+          axis.line = element_blank(),
+          legend.position = "none", 
+          panel.background = element_blank(), #transparent panel bg
+          plot.background = element_rect(fill='white'), #transparent plot bg
+          panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2),
+          plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm")) -> p; p; 
+#p %>% ggsave(filename = paste0(ws, "/VlnPlot_GeneCount_IschRegions.tiff"), plot = ., device = "tiff", width = 6, height = 7, bg = "white", dpi = 300)
+```
+
+Compute markers (= significantly up- / down-regulated genes)
+```{r compute markers and save}
+spatial.seurat <- SetIdent(spatial.seurat, value = "DetailedRegionAnnoShort")
+
+markers <- FindAllMarkers(spatial.seurat, assay = "SCT", logfc.threshold = 0.58, verbose = T, only.pos = F) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  split(f = .[["cluster"]])
+
+# to save the marker list
+write.xlsx(markers, file = file.path(ws, "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx"), overwrite = T)
+```
+
+```{r Markers up and down}
+markers.up <- markers %>% 
+  lapply(., filter, avg_log2FC > 0)
+markers.down <- markers %>% 
+  lapply(., filter, avg_log2FC < 0)
+
+markers.isch <- markers[isch.regions]
+
+## Spatial plots for selected lesion-delineating markers
+features <- c(
+  "Gfap", "Aif1", "Plp1", "Pdgfra", "Col1a1", # canonical markers
+  "Ccl12", 'Spp1', 'Lyz2', 'Ctsd', 'Apoe', 'Serpina3n', 'Vim', 'Mt1', 'C4b', 'Cenpa', 'Csf1r',  'Cldn11', 'Klk6', "Trem2", "Cst7")
+lapply(features, function(feature){
+  minmax <- c(spatial.seurat@assays$SCT[feature] %>% min, spatial.seurat@assays$SCT[feature] %>% max)
+  p <- spatial.seurat %>% SpatialPlot(features = feature, images = c('sham', 'D1', 'D3', 'D7'), image.alpha = 0, alpha = c(0.8, 1), crop = F, stroke = 0, max.cutoff = 'q99') & NoLegend() & 
+    theme(text = element_text(family = 'OpenSans')) &
+  ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 11) %>% rev, limits = c(minmax[1], minmax[2]))
+  print(p)
+  #p %>% ggsave(filename = paste0(ws, "/SpatialPlot_feature_", feature, ".tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 18, height = 6)
+}) ## Spatial plots, can be saved
+
+## chemokine module
+module <- c("Ccl12", 'Ccl2', 'Ccl3', 'Ccl4', 'Ccl7', 'Cxcl10', 'Cxcl16')
+spatial.seurat %<>% AddModuleScore(features = list(module), name = "MGchemo_mod"); spatial.seurat[[]] %>% names %>% tail
+
+feature <- "MGchemo_mod1"
+spatial.seurat %>% SpatialPlot(features = feature, images = c('sham', 'D1', 'D3', 'D7'), image.alpha = 0.2, alpha = c(0.5, 1), crop = F, stroke = 0) & 
+  NoLegend() & 
+  theme(text = element_text(family = "OpenSans")) & 
+  ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 11) %>% rev, limits = c(spatial.seurat[[feature]] %>% min, spatial.seurat[[feature]] %>% max))
+```
+
+```{r read in marker list }
+# read to continue after a pause
+markers <- read_all_sheets(file = file.path(ws, "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx"))
+
+markers.up <- markers %>% lapply(., filter, avg_log2FC > 0) 
+markers.down <- markers %>% lapply(., filter, avg_log2FC < 0)
+```
+
+A heatmap summarizing the DEG numbers
+```{r summary heatmap of lesion markers}
+ht.df <- sapply(isch.regions, function(isch){
+  temp1 <- markers.up[[isch]] %>% nrow
+  temp2 <- markers.down[[isch]] %>% nrow
+  l <- data.frame("Up" = temp1, "Down" = temp2)
+  return(l)
+}); ht.df <- ht.df %>% as.data.frame %>% tibble::rownames_to_column(var = "GexpChange") %>% tidyr::pivot_longer(cols = 2:ncol(.), names_to = "Ischemias", values_to = "values"); ht.df$values <- ht.df$values %>% as.numeric; ht.df$Ischemias <- factor(ht.df$Ischemias, levels = ht.df$Ischemias %>% unique)
+
+(ggplot(data = ht.df, aes(x = GexpChange, y = Ischemias, fill = values)) + 
+  geom_tile() + 
+  geom_text(aes(label = values), size = 30) +
+  scale_fill_gradient(low = "#F8EFF1", high = "#AF3039") + 
+  xlab("") + ylab("") + coord_flip() +
+  theme(
+    text = element_text(family = "OpenSans", face = "bold"), 
+    axis.text = element_text(face = "bold", vjust = 1, hjust = 0.5, size = 50),
+    panel.border = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(), #transparent panel bg
+    plot.background = element_rect(fill='white'), #transparent plot bg
+    legend.position = "none"
+  )) #%>% ggsave(filename = file.path(ws, "Heatmap_UpDownRegulatedMarkers_inIschemic.tiff"), device = "tiff", width = 9, height = 3, dpi = 300)
+```
+
+A heatmap with a visual DEG pattern
+```{r heatmap}
+set.seed <- 20230202
+roi <- c('CTX1-4', 'CTX5', 'CTX6', 'ISD1c', 'ISD1p', 'ISD3c', 'ISD3p', 'ISD7c', 'ISD7p')
+cells <- sample(Cells(spatial.seurat)[spatial.seurat$DetailedRegionAnnoShort %in% roi], size = 500, replace = F) ## select cells from the regions of interest
+
+features <- c(markers.up[["ISD1c"]]$gene, markers.up[["ISD1p"]]$gene, markers.up[["ISD3c"]]$gene, markers.up[["ISD3p"]]$gene, markers.up[["ISD7c"]]$gene, markers.up[["ISD7p"]]$gene, markers.up[["CTX1-4"]]$gene, markers.up[["CTX5"]]$gene, markers.up[["CTX6"]]$gene) %>% unique 
+
+# Draw the heatmap
+smaller.spatial <- spatial.seurat %>% subset(idents = roi); smaller.spatial$DetailedRegionAnnoShort %<>% factor(., levels = roi)
+ht <- DoHeatmap(smaller.spatial, group.by = "DetailedRegionAnnoShort", cells = cells, features = features, group.bar = T, group.colors = col.list$cols_mono_short, combine = T, size = 20) & theme(axis.text.y = element_text(size = 6), panel.background = element_blank(), plot.background = element_blank()); ht; 
+
+# save the heatmap
+# ht %>% ggsave(file = file.path(ws, "Heatmap_DEGs_up.tiff"), device = 'tiff', dpi = 300, width = 9, height = 20)
+```
+
+UpSet Plots for the mutual gene overlaps 
+```{r UpSet Plot Upregulated Markers}
+library(UpSetR)
+upset.markers <- markers.up %>% lapply(., function(x){dplyr::pull(x, gene)})
+
+# all isch regions upset ####
+sets <- c("ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p", "CTX1-4", "CTX5", "CTX6") %>% rev #selecting regions of interest
+temp.upset <- upset(fromList(upset.markers[sets]), 
+                    sets = sets, 
+                    sets.bar.color = col.list[["cols_mono_short"]][sets],
+                    order.by = "freq",
+                    keep.order = T) 
+temp.upset
+
+# core upset ####
+sets <- c("ISD1c", "ISD3c", "ISD7c", "CTX1-4", "CTX5", "CTX6") %>% rev #selecting regions of interest
+temp.upset <- upset(fromList(upset.markers[sets]), 
+                    sets = sets, 
+                    sets.bar.color = col.list[["cols_mono_short"]][sets],
+                    order.by = "freq",
+                    keep.order = T)
+temp.upset
+
+# periphery upset ####
+sets <- c("ISD1p", "ISD3p", "ISD7p", "CTX1-4", "CTX5", "CTX6") %>% rev #selecting regions of interest
+temp.upset <- upset(fromList(upset.markers[sets]), 
+                    sets = sets, 
+                    sets.bar.color = col.list[["cols_mono_short"]][sets],
+                    order.by = "freq",
+                    keep.order = T)
+
+temp.upset
+```
+
+Gene ontology analysis
+```{r Functional Annotation (ORA)}
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE); library(UpSetR)
+
+# markers up ####
+up.core <- markers.up[c("ISD1c", "ISD3c", "ISD7c")] %>% lapply(., function(i){i[["gene"]] %>% as.vector}) ## isch cores markers
+up.peri <- markers.up[c("ISD1p", "ISD3p", "ISD7p")] %>% lapply(., function(i){i[["gene"]] %>% as.vector}) ## isch peripheries markers
+
+## ORA
+organism <- org.Mm.eg.db; background <- rownames(spatial.seurat[["SCT"]])
+ORA.list <- lapply(c(up.core, up.peri), function(x) enrichGO(gene          = x, # list of genes 
+                                                      universe      = background, # 'potential DEGs'
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = organism,
+                                                      ont           = "BP", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01, #
+                                                      qvalueCutoff  = 0.2,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% clusterProfiler::simplify()) ; ORA.list <- lapply(ORA.list, arrange, p.adjust)
+
+# save
+# write.xlsx(ORA.list, file = file.path(ws, "ORAlist_onMarkers_UP_IschemicRegions.xlsx"), overwrite = T)
+
+# markers down ####
+down.core <- markers.down[c("ISD1c", "ISD3c", "ISD7c")] %>% lapply(., function(i){i[["gene"]] %>% as.vector}) ## isch cores markers
+down.peri <- markers.down[c("ISD1p", "ISD3p", "ISD7p")] %>% lapply(., function(i){i[["gene"]] %>% as.vector}) ## isch peripheries markers
+
+## ORA
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE); library(UpSetR)
+organism <- org.Mm.eg.db; background <- rownames(spatial.seurat[["SCT"]])
+ORA.list <- lapply(c(down.core, down.peri), function(x) enrichGO(gene          = x, # list of genes 
+                                                      universe      = background, # 'potential DEGs'
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = organism,
+                                                      ont           = "BP", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01, #
+                                                      qvalueCutoff  = 0.2,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% clusterProfiler::simplify()) ; ORA.list <- lapply(ORA.list, arrange, p.adjust)
+
+# save
+# write.xlsx(ORA.list, file = file.path(ws, "ORAlist_onMarkers_DOWN_IschemicRegions.xlsx"), overwrite = T)
+
+```
+
+Mutual GO terms
+```{r Upset Plot on ORA results Upregulated}
+ORA.list <- read_all_sheets(file = file.path(ws, "ORAlist_onMarkers_UP_IschemicRegions.xlsx"))
+ORA_upset <- ORA.list %>% lapply(., function(x) dplyr::pull(x, ID)) ## pull GO IDs 
+
+# all ORA ####
+sets <- isch.regions
+temp.upset <- upset(fromList(ORA_upset[sets]),
+                    sets = sets,
+                    sets.bar.color = col.list[["cols_mono_short"]][sets],
+                    order.by = "freq", text.scale = 2.5,
+                    keep.order = T)
+temp.upset
+
+# core ORA ####
+sets <- c("ISD1c", "ISD3c", "ISD7c") %>% rev
+temp.upset <- upset(fromList(ORA_upset[sets]),
+                    sets = sets,
+                    sets.bar.color = col.list[["cols_mono_short"]][sets],
+                    order.by = "freq", text.scale = 2.5,
+                    keep.order = T)
+temp.upset
+
+# periphery ORA ####
+sets <- c("ISD1p", "ISD3p", "ISD7p") %>% rev
+temp.upset <- upset(fromList(ORA_upset[sets]),
+                    sets = sets,
+                    sets.bar.color = col.list[["cols_mono_short"]][sets],
+                    order.by = "freq", text.scale = 2.5, 
+                    keep.order = T)
+temp.upset
+```
+
+Spatial plots of selected enriched GO terms
+```{r Spatial plotting selected GO terms}
+ORA_upset
+
+# a custom function to retrieve upset overlaps
+overlapGroups <- function (listInput, sort = TRUE) {
+  listInputmat    <- fromList(listInput) == 1
+  listInputunique <- unique(listInputmat) # condense for unique elements
+  grouplist <- list()
+  # going through all unique combinations and collect elements for each in a list
+  for (i in 1:nrow(listInputunique)) {
+    currentRow <- listInputunique[i,]
+    myelements <- which(apply(listInputmat,1,function(x) all(x == currentRow)))
+    attr(myelements, "groups") <- currentRow
+    grouplist[[paste(colnames(listInputunique)[currentRow], collapse = ":")]] <- myelements
+    myelements
+  }
+  if (sort) {
+    grouplist <- grouplist[order(sapply(grouplist, function(x) length(x)), decreasing = TRUE)]
+  }
+  attr(grouplist, "elements") <- unique(unlist(listInput))
+  return(grouplist)
+}
+UpsetORAlist <- overlapGroups(ORA_upset)
+
+# GO terms of interest
+GOI <- list(#overlap1
+            "TNFproduction" = list("GOname" = "TNFproduction", "Genes" = UpsetORAlist[[1]]$geneID[1] %>% strsplit(split = "/") %>% unlist),
+            "DefenseResponseToVirus" = list("GOname" = "DefenseResponseToVirus", "Genes" = UpsetORAlist[[1]]$geneID[2] %>% strsplit(split = "/") %>% unlist),
+            "RegulationOfLeukocyteProliferation" = list("GOname" = "RegulationOfLeukocyteProliferation", "Genes" = UpsetORAlist[[1]]$geneID[4] %>% strsplit(split = "/") %>% unlist),
+            "RegulationOfGliogenesis" = list("GOname" = "RegulationOfGliogenesis", "Genes" = UpsetORAlist[[1]]$geneID[6] %>% strsplit(split = "/") %>% unlist),
+            "RegulationOfBodyFluids" = list("GOname" = "RegulationOfBodyFluids", "Genes" = UpsetORAlist[[1]]$geneID[7] %>% strsplit(split = "/") %>% unlist),
+            "RegOfNeuralPrecursorCellProlif" = list("GOname" = "RegOfNeuralPrecursorCellProlif", "Genes" = UpsetORAlist[[1]]$geneID[8] %>% strsplit(split = "/") %>% unlist),
+            "HomeostasisOfNumberOfCells" = list("GOname" = "HomeostasisOfNumberOfCells", "Genes" = UpsetORAlist[[1]]$geneID[9] %>% strsplit(split = "/") %>% unlist),
+            "FattyAcidMetabolism" = list("GOname" = "FattyAcidMetabolism", "Genes" = UpsetORAlist[[1]]$geneID[13] %>% strsplit(split = "/") %>% unlist),
+            "RegOfNitricOxideMetabProcess" = list("GOname" = "RegOfNitricOxideMetabProcess", "Genes" = UpsetORAlist[[1]]$geneID[15] %>% strsplit(split = "/") %>% unlist),
+            "CellJunctionDisassembly" = list("GOname" = "CellJunctionDisassembly", "Genes" = UpsetORAlist[[1]]$geneID[16] %>% strsplit(split = "/") %>% unlist),
+            "NegativeRegOfEndopeptidaseActivity" = list("GOname" = "NegativeRegOfEndopeptidaseActivity", "Genes" = UpsetORAlist[[1]]$geneID[18] %>% strsplit(split = "/") %>% unlist),
+            "PositiveRegOfIonTransport" = list("GOname" = "PositiveRegOfIonTransport", "Genes" = UpsetORAlist[[1]]$geneID[20] %>% strsplit(split = "/") %>% unlist),
+  #overlap2
+            "LeukocyteMediatedImmunity" = list("GOname" = "LeukocyteMediatedImmunity", "Genes" = UpsetORAlist[[2]]$geneID[1] %>% strsplit(split = "/") %>% unlist),
+            "RegOfProteinContainingAssembly" = list("GOname" = "RegOfProteinContainingAssembly", "Genes" = UpsetORAlist[[2]]$geneID[2] %>% strsplit(split = "/") %>% unlist),
+            "ActinFilamentOrganization" = list("GOname" = "ActinFilamentOrganization", "Genes" = UpsetORAlist[[2]]$geneID[3] %>% strsplit(split = "/") %>% unlist),
+            "TissueRemodeling" = list("GOname" = "TissueRemodeling", "Genes" = UpsetORAlist[[2]]$geneID[4] %>% strsplit(split = "/") %>% unlist),
+            "LeukocyteDegranulation" = list("GOname" = "LeukocyteDegranulation", "Genes" = UpsetORAlist[[2]]$geneID[5] %>% strsplit(split = "/") %>% unlist),
+            "PositiveRegOfCellActivation" = list("GOname" = "PositiveRegOfCellActivation", "Genes" = UpsetORAlist[[2]]$geneID[7] %>% strsplit(split = "/") %>% unlist),
+            "AdaptiveImmuneResponse" = list("GOname" = "AdaptiveImmuneResponse", "Genes" = UpsetORAlist[[2]]$geneID[8] %>% strsplit(split = "/") %>% unlist),
+            "LeukocyteMediatedCytotoxicity" = list("GOname" = "LeukocyteMediatedCytotoxicity", "Genes" = UpsetORAlist[[2]]$geneID[10] %>% strsplit(split = "/") %>% unlist),
+            "CytokineMediatedSignalingPathway" = list("GOname" = "CytokineMediatedSignalingPathway", "Genes" = UpsetORAlist[[2]]$geneID[11] %>% strsplit(split = "/") %>% unlist),
+            "Phagocytosis" = list("GOname" = "Phagocytosis", "Genes" = UpsetORAlist[[2]]$geneID[12] %>% strsplit(split = "/") %>% unlist),
+            "IntegringMediatedCellAdhesion" = list("GOname" = "IntegringMediatedCellAdhesion", "Genes" = UpsetORAlist[[2]]$geneID[15] %>% strsplit(split = "/") %>% unlist),
+            "RespiratoryBurst" = list("GOname" = "RespiratoryBurst", "Genes" = UpsetORAlist[[2]]$geneID[22] %>% strsplit(split = "/") %>% unlist),
+            "ReactiveNitrogenSpeciesMetProc" = list("GOname" = "ReactiveNitrogenSpeciesMetProc", "Genes" = UpsetORAlist[[2]]$geneID[29] %>% strsplit(split = "/") %>% unlist),
+            "CorticalCytoskeletonOrg" = list("GOname" = "CorticalCytoskeletonOrg", "Genes" = UpsetORAlist[[2]]$geneID[30] %>% strsplit(split = "/") %>% unlist),
+ #overlap3           
+            "ExtracellularStructureOrg" = list("GOname" = "ExtracellularStructureOrg", "Genes" = UpsetORAlist[[3]]$geneID[1] %>% strsplit(split = "/") %>% unlist),
+            "RibonucProtAssembly" = list("GOname" = "RibonucProtAssembly", "Genes" = UpsetORAlist[[3]]$geneID[3] %>% strsplit(split = "/") %>% unlist),
+            "NegRegOfCytokineProduction" = list("GOname" = "NegRegOfCytokineProduction", "Genes" = UpsetORAlist[[3]]$geneID[5] %>% strsplit(split = "/") %>% unlist),
+            "EstablishmentOfProteinLocalizationToOrganelle" = list("GOname" = "EstablishmentOfProteinLocalizationToOrganelle", "Genes" = UpsetORAlist[[3]]$geneID[6] %>% strsplit(split = "/") %>% unlist),
+            "CellularResponseToMechanicalStimulus" = list("GOname" = "CellularResponseToMechanicalStimulus", "Genes" = UpsetORAlist[[3]]$geneID[7] %>% strsplit(split = "/") %>% unlist),
+            "MesenchymeDevelopment" = list("GOname" = "MesenchymeDevelopment", "Genes" = UpsetORAlist[[3]]$geneID[8] %>% strsplit(split = "/") %>% unlist),
+            "TGFbetaProduction" = list("GOname" = "TGFbetaProduction", "Genes" = UpsetORAlist[[3]]$geneID[10] %>% strsplit(split = "/") %>% unlist),
+            "CellDeathInResonseToOxidativeStress" = list("GOname" = "CellDeathInResonseToOxidativeStress", "Genes" = UpsetORAlist[[3]]$geneID[18] %>% strsplit(split = "/") %>% unlist),
+            "NegRegOfBloodCoagulation" = list("GOname" = "NegRegOfBloodCoagulation", "Genes" = UpsetORAlist[[3]]$geneID[19] %>% strsplit(split = "/") %>% unlist),
+  #overlap4          
+            "PosRegOfPeptidaseActivity" = list("GOname" = "PosRegOfPeptidaseActivity", "Genes" = UpsetORAlist[[4]]$geneID[7] %>% strsplit(split = "/") %>% unlist),
+            "PosRegOfTcellMediatedCytotoxicity" = list("GOname" = "PosRegOfTcellMediatedCytotoxicity", "Genes" = UpsetORAlist[[4]]$geneID[8] %>% strsplit(split = "/") %>% unlist),
+            "RegOfEndothelialCellDiff" = list("GOname" = "RegOfEndothelialCellDiff", "Genes" = UpsetORAlist[[4]]$geneID[9] %>% strsplit(split = "/") %>% unlist),
+            "Pyroptosis" = list("GOname" = "Pyroptosis", "Genes" = UpsetORAlist[[4]]$geneID[11] %>% strsplit(split = "/") %>% unlist),
+            "ReleaseOfSequesteredCalciumIonIntoCytosol" = list("GOname" = "ReleaseOfSequesteredCalciumIonIntoCytosol", "Genes" = UpsetORAlist[[4]]$geneID[13] %>% strsplit(split = "/") %>% unlist),
+            "PosRegOfSMCmigration" = list("GOname" = "PosRegOfSMCmigration", "Genes" = UpsetORAlist[[4]]$geneID[16] %>% strsplit(split = "/") %>% unlist),
+            "ResponseToIL6" = list("GOname" = "ResponseToIL6", "Genes" = UpsetORAlist[[4]]$geneID[20] %>% strsplit(split = "/") %>% unlist),
+  #overlap5          
+            "GranulocyteChemotaxis" = list("GOname" = "GranulocyteChemotaxis", "Genes" = UpsetORAlist[[5]]$geneID[1] %>% strsplit(split = "/") %>% unlist),
+            "CellularResponseToChemokine" = list("GOname" = "CellularResponseToChemokine", "Genes" = UpsetORAlist[[5]]$geneID[4] %>% strsplit(split = "/") %>% unlist),
+            "CellularResponseToOxidativeStress" = list("GOname" = "CellularResponseToOxidativeStress", "Genes" = UpsetORAlist[[5]]$geneID[6] %>% strsplit(split = "/") %>% unlist),
+            "ResponseToUnfoldedProtein" = list("GOname" = "ResponseToUnfoldedProtein", "Genes" = UpsetORAlist[[5]]$geneID[10] %>% strsplit(split = "/") %>% unlist),
+            "RegulationOfWoundHealing" = list("GOname" = "RegulationOfWoundHealing", "Genes" = UpsetORAlist[[5]]$geneID[11] %>% strsplit(split = "/") %>% unlist),
+  #overlap6          
+            "Angiogenesis" = list("GOname" = "Angiogenesis", "Genes" = UpsetORAlist[[6]]$geneID[1] %>% strsplit(split = "/") %>% unlist),
+            "LeukocyteMigration" = list("GOname" = "LeukocyteMigration", "Genes" = UpsetORAlist[[6]]$geneID[2] %>% strsplit(split = "/") %>% unlist),
+            "ResponseToMoleculeOfBacterialOrigin" = list("GOname" = "ResponseToMoleculeOfBacterialOrigin", "Genes" = UpsetORAlist[[6]]$geneID[8] %>% strsplit(split = "/") %>% unlist),
+            "ResponseToInterleukin1" = list("GOname" = "ResponseToInterleukin1", "Genes" = UpsetORAlist[[6]]$geneID[9] %>% strsplit(split = "/") %>% unlist),
+            "CellularResponseToLipid" = list("GOname" = "CellularResponseToLipid", "Genes" = UpsetORAlist[[6]]$geneID[12] %>% strsplit(split = "/") %>% unlist),
+            "PosRegOfCellAdhesion" = list("GOname" = "PosRegOfCellAdhesion", "Genes" = UpsetORAlist[[6]]$geneID[13] %>% strsplit(split = "/") %>% unlist),
+            "ResponseToInterferonGamma" = list("GOname" = "ResponseToInterferonGamma", "Genes" = UpsetORAlist[[6]]$geneID[19] %>% strsplit(split = "/") %>% unlist),
+            "NegRegOfHydrolaseActivity" = list("GOname" = "NegRegOfHydrolaseActivity", "Genes" = UpsetORAlist[[6]]$geneID[20] %>% strsplit(split = "/") %>% unlist),
+            "CollagenMetabolicProcess" = list("GOname" = "CollagenMetabolicProcess", "Genes" = UpsetORAlist[[6]]$geneID[21] %>% strsplit(split = "/") %>% unlist),
+            "AcuteInflamResponse" = list("GOname" = "AcuteInflamResponse", "Genes" = UpsetORAlist[[6]]$geneID[25] %>% strsplit(split = "/") %>% unlist),
+  #overlap7        
+            "SuperoxideMetabProcess" = list("GOname" = "SuperoxideMetabProcess", "Genes" = UpsetORAlist[[7]]$geneID[4] %>% strsplit(split = "/") %>% unlist),
+            "MyeloidCellActivationInvolvedInImmuneResp" = list("GOname" = "MyeloidCellActivationInvolvedInImmuneResp", "Genes" = UpsetORAlist[[7]]$geneID[2] %>% strsplit(split = "/") %>% unlist),
+  #overlap8          
+            "LymphocyteProliferation" = list("GOname" = "LymphocyteProliferation", "Genes" = UpsetORAlist[[8]]$geneID[1] %>% strsplit(split = "/") %>% unlist),
+            "PosRegOfMAPKcascade" = list("GOname" = "PosRegOfMAPKcascade", "Genes" = UpsetORAlist[[8]]$geneID[3] %>% strsplit(split = "/") %>% unlist),
+            "RegOfCellShape" = list("GOname" = "RegOfCellShape", "Genes" = UpsetORAlist[[8]]$geneID[4] %>% strsplit(split = "/") %>% unlist),
+            "RegOfPlasmaLipoproteinParticleLevels" = list("GOname" = "RegOfPlasmaLipoproteinParticleLevels", "Genes" = UpsetORAlist[[8]]$geneID[9] %>% strsplit(split = "/") %>% unlist),
+  #overlap10          
+            "RegOfMitoticCellCycle" = list("GOname" = "RegOfMitoticCellCycle", "Genes" = UpsetORAlist[[10]]$geneID[6] %>% strsplit(split = "/") %>% unlist),
+  #overlap11          
+            "MononuclearCellDiff" = list("GOname" = "MononuclearCellDiff", "Genes" = UpsetORAlist[[11]]$geneID[1] %>% strsplit(split = "/") %>% unlist),
+  #overlap14          
+            "RegOfERK1and2pathway" = list("GOname" = "RegOfERK1and2pathway", "Genes" = UpsetORAlist[[14]]$geneID[3] %>% strsplit(split = "/") %>% unlist),
+            "EndothelialCellApoptosis" = list("GOname" = "EndothelialCellApoptosis", "Genes" = UpsetORAlist[[14]]$geneID[5] %>% strsplit(split = "/") %>% unlist)
+)
+
+# Spatial plot only (remove the inner hashtag to save)
+lapply(GOI, function(i){
+  GOname <- i[["GOname"]]; p <- list()
+  spatial.seurat %<>% AddModuleScore(features = list(i[["Genes"]]), assay = "SCT", name = GOname)
+  minmaxlimits <- c(min(spatial.seurat[[paste0(GOname, "1")]]), max(spatial.seurat[[paste0(GOname, "1")]])) %>% round(digits = 2)
+  p1 <- spatial.seurat %>% 
+    SpatialPlot(features = paste0(GOname, "1"), images = c('sham', 'D1', 'D3', 'D7'), crop = F, ncol = 4, pt.size.factor = 1.35, image.alpha = 0, combine = T, stroke = 0.05, alpha = c(0.4, 1)) & 
+       viridis::scale_fill_viridis(option = "rocket", direction = -1, limits = minmaxlimits, alpha = 1, end = 0.95) & labs(fill = GOname) & NoLegend() &
+    theme(text = element_text(family = "OpenSans", size = 16), axis.text = element_text(family = 'OpenSans', size = 16), plot.margin = unit(c(0,0,0,0), "cm"))
+  print(p1)
+  #p1 %>% ggsave(filename = paste0(ws, "/GOplots/GOplot_", GOname, "_combined.tiff"), device = "tiff", dpi = 300, units = "cm", height = 9, width = 36)
+})
+
+# Spatial plot for the gif (remove the inner hashtag to save)
+lapply(GOI[1:30], function(i){
+  GOname <- i[["GOname"]]; p <- list()
+  spatial.seurat %<>% AddModuleScore(features = list(i[["Genes"]]), assay = "SCT", name = GOname)
+  minmaxlimits <- c(min(spatial.seurat[[paste0(GOname, "1")]]), max(spatial.seurat[[paste0(GOname, "1")]])) %>% round(digits = 2)
+  p1 <- spatial.seurat %>% 
+    SpatialPlot(features = paste0(GOname, "1"), images = c('sham', 'D1', 'D3', 'D7'), crop = T, ncol = 4, pt.size.factor = 1.9, image.alpha = 0, combine = T, stroke = 0.05, alpha = c(0.8, 1)) & 
+    ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 11) %>% rev, limits = c(minmaxlimits[1], minmaxlimits[2])) &
+    #   viridis::scale_fill_viridis(option = "rocket", direction = -1, limits = minmaxlimits, alpha = 1, end = 0.95) & 
+    labs(fill = "") & NoLegend() &
+    theme(text = element_text(family = "OpenSans", size = 16), axis.text = element_text(family = 'OpenSans', size = 16), plot.margin = unit(c(0,0,0,0), "cm"))
+  print(p1)
+  #p1 %>% ggsave(filename = paste0(ws, "/GOplots/GIF/GOplot_", GOname, "_combined.tiff"), device = "tiff", dpi = 200, units = "cm", height = 9, width = 14)
+})
+
+# Spatial plot + violin (remove the inner hashtag to save)
+lapply(GOI, function(i){
+  GOname <- i[["GOname"]]; p <- list()
+  spatial.seurat <- AddModuleScore(spatial.seurat, features = list(i[["Genes"]]), assay = "SCT", name = GOname)
+  minmaxlimits <- c(round(min(spatial.seurat[[paste0(GOname, "1")]]), 2),round(max(spatial.seurat[[paste0(GOname, "1")]]), 2))
+  pairs <- lapply(c("sham", "D1", "D3", "D7"), function(x){
+    
+  p1 <- (SpatialFeaturePlot(spatial.seurat, features = paste0(GOname, "1"), images = x,  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0, alpha = c(0.6, 1)) & viridis::scale_fill_viridis(option = "A", direction = -1, limits = minmaxlimits, alpha = 1, end = 0.95)) & labs(fill = GOname) & 
+    theme(text = element_text(family = "OpenSans", size = 16), axis.text = element_text(family = 'OpenSans', size = 16), plot.margin = unit(c(0,0,0,0), "cm"))
+  
+  p2 <- VlnPlot(subset(spatial.seurat, subset = Condition == x), features = paste0(GOname, "1"), pt.size = 0, group.by = "DetailedRegionAnnoShort", cols = col.list[["cols_mono_short"]], ncol = 1) & coord_flip() & scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) & xlab("") & labs(title = "") & ylim(minmaxlimits) &
+    theme(axis.text.x = element_text(family = 'OpenSans', angle = 30, size = 7.5, hjust = 0.7, vjust = 0.8), 
+          axis.text.y = element_text(family = 'OpenSans', size = 10),
+          text = element_text(family = "OpenSans", size = 25), 
+          legend.position = "none", 
+          plot.margin = unit(c(0, 0.3, 0.3, 0), "cm"))
+  
+  p[[paste0(GOname, "_", x)]] <- (cowplot::plot_grid(p1, p2, ncol = 2, rel_widths = c(1, 0.5), align = "h"))
+  })
+  (cowplot::plot_grid(plotlist = pairs, ncol = 3, align = "hv") + theme(plot.background = element_rect(fill = "white", colour = NA), plot.margin = unit(c(0,0,0,0), "cm"))) -> p1 
+  print(p1)
+  # p1 %>% ggsave(filename = paste0(ws, "/GOplots/GOplot_", GOname, "_combined.tiff"), device = "tiff", plot = ., dpi = 300, units = "cm", height = 22, width = 36)
+})
+
+# Just spatial plot, every image saved individually (remove the inner hashtag to save)
+lapply(GOI, function(i){
+  GOname <- i[["GOname"]]; p <- list()
+  spatial.seurat <- AddModuleScore(spatial.seurat, features = list(i[["Genes"]]), assay = "SCT", name = GOname)
+  minmaxlimits <- c(round(min(spatial.seurat[[paste0(GOname, "1")]]), 2),round(max(spatial.seurat[[paste0(GOname, "1")]]), 2))
+  print(minmaxlimits)
+  pairs <- lapply(c("sham", "D1", "D3", "D7"), function(x){
+    
+  p1 <- (SpatialFeaturePlot(spatial.seurat, features = paste0(GOname, "1"), images = x,  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.3, combine = T, stroke = 0, alpha = c(0.4, 1)) & viridis::scale_fill_viridis(option = "A", direction = -1, limits = minmaxlimits, alpha = 1, end = 0.95)) & labs(fill = GOname) & NoLegend() & 
+    theme(text = element_text(family = "OpenSans", size = 10), plot.margin = unit(c(0,0,0,0), "cm"))
+  print(p1)
+  # p1 %>% ggsave(filename = paste0(ws, "/GOplots/GOplot_", GOname, "_", x, ".tiff"), device = "tiff", plot = ., dpi = 300, units = "cm", height = 6, width = 6)
+  
+  })
+})
+```
+
+```{r Metascape for the visualization of functional annotation}
+up.core <- markers.up[c("ISD1c", "ISD3c", "ISD7c")] %>% lapply(., function(i){i[["gene"]] %>% as.vector}) ## isch cores markers
+up.peri <- markers.up[c("ISD1p", "ISD3p", "ISD7p")] %>% lapply(., function(i){i[["gene"]] %>% as.vector}) ## isch peripheries markers
+
+### up.core and up.peri were submitted for GO analysis and clustering on https://metascape.org/gp/index.html#/main/step1 . The parameters of the metascape enrichment analysis matched ours (bin size of 5, p.value < 0.01). Pathways included for enrichment were: GO biological processes
+```
+
+Metascape' GO results are bundled thematically into modules, characterized by a parent term. Extracting these gives a summary of general processes.
+
+load MetaScape results
+```{r load metascape results}
+result.list[["1DPI"]] <- read_all_sheets(file = file.path("ws", "Metascape_D1_UP.xlsx"))
+result.list[["3DPI"]] <- read_all_sheets(file = file.path("ws", "Metascape_D3_UP.xlsx"))
+result.list[["7DPI"]] <- read_all_sheets(file = file.path("ws", "Metascape_D7_UP.xlsx"))
+```
+
+get GO module summaries
+```{r get GO module summaries}
+# extract the gene set enrichment info
+result.list[["Enrichments"]] <-
+  c("1DPI", "3DPI", "7DPI") %>% lapply(\(x) {
+    # extract the summarizing 'parent' GO terms
+    temp <- result.list[[x]][["Enrichment"]]
+    summary_go <- temp[["GroupID"]] %>%
+      stringr::str_subset(pattern = "_Summary$")
+    
+    temp %<>%
+      filter(GroupID %in% summary_go) %>%
+      mutate(Condition = rep(x, times = nrow(.)))
+    return(temp)
+  }) %>%
+  bind_rows() %>%
+  mutate(
+    Process_Description = paste0(
+      Condition,
+      "_",
+      Description %>%
+        stringr::str_replace_all(pattern = " ", replacement = "_") %>%
+        stringr::str_to_title()
+    )
+  )
+```
+
+(Optional) Save the GO summaries
+```{r save GO summaries}
+saveRDS(result.list[["Enrichments"]], file = file.path("ws", "Metascape_GO_parent_terms.Rds"))
+```
+
+
+Having collected the GO summary parent terms, now we can use their associated genes to calculate enrichments of their gene expression for the spatial data.
+```{r GO summaries as module scores}
+# get the gene lists of GO summary parent terms
+result.list[["GOsummaries"]] <- list()
+for (i in result.list[["Enrichments"]][["Process_Description"]]) {
+  # select the gene symbols of every process
+  temp <-  result.list[["Enrichments"]] %>%
+    filter(Process_Description %in% i) %>%
+    pull(Symbols) %>%
+    strsplit(",")
+  
+  # append the results
+  result.list[["GOsummaries"]] %<>% append(temp)
+}
+names(result.list[["GOsummaries"]]) <-
+  result.list[["Enrichments"]] %>% pull(Process_Description)
+
+# turn the GO summaries into module scores.
+spatial.seurat %<>% AddModuleScore(features = result.list[["GOsummaries"]],
+                                   name = names(result.list[["GOsummaries"]]),
+                                   assay = "SCT")
+
+# remove environmental variables
+rm(i, temp)
+```
+
+```{r SpatialPlot of the GO summaries}
+features <-
+  spatial.seurat@meta.data %>% 
+  colnames() %>% 
+  stringr::str_subset(pattern = "^(1DPI_|3DPI_|7DPI_)")
+  
+plot.list[["SpatialPlots_GOsummaries"]] <-
+  features %>% lapply(\(x) {
+    # range value for the feature
+    limits <- c(min(spatial.seurat@meta.data[[x]]),
+                max(spatial.seurat@meta.data[[x]]))
+    
+    # unify the color scheme such that middle value is 0
+    color_values <- c(
+      limits[1],
+      limits[1] + (limits[2] - limits[1]) * 1 / 6,
+      limits[1] + (limits[2] - limits[1]) * 2 / 6,
+      0,
+      # Midpoint corresponding to 0
+      limits[1] + (limits[2] - limits[1]) * 4 / 6,
+      limits[1] + (limits[2] - limits[1]) * 5 / 6,
+      limits[2]
+    )
+    
+    #Plot the spatial data
+    plot <- spatial.seurat %>% SpatialPlot(
+      features = x,
+      images = sections,
+      crop = TRUE,
+      ncol = 4,
+      pt.size.factor = 2.5,
+      stroke = 0,
+      alpha = 1,
+      image.alpha = 0,
+      combine = TRUE
+    ) &
+      theme_mk &
+      remove_grid &
+      NoAxes() &
+      theme(legend.position = "none",
+            panel.border = element_blank()) &
+      scale_alpha_continuous(range = c(0.8, 1)) &
+      scale_fill_gradientn(
+        colours = col.list$gradient_blue_yellow_red,
+        values = scales::rescale(color_values, from = limits)
+      ) &
+      labs(title = NULL, subtitle = x)
+    
+    return(plot)
+  })
+names(plot.list[["SpatialPlots_GOsummaries"]]) <- features
+print(plot.list[["SpatialPlots_GOsummaries"]][["7DPI_Positive_regulation_of_cell_adhesion53"]])
+
+```
+
+Correlation of GO summaries
+```{r}
+
+
+
+
+```
+
+
+
+
+
+
+=== Magnetic Resonance Imaging data ===
+```{r Magnetic resonance imaging MRI}
+mri.data <- data.frame(
+  "mcao" = rep(c('1DPI', '3DPI', '7DPI'), each = 5) %>% factor(levels = c('1DPI', '3DPI', '7DPI')),
+  "VolLesion" = c(2.846, 1.886, 9.082, 23.26, 8.054, # D1; lesion volume in mm3
+                  7.933, 5.935, 10.354, 12.747, 14.932, # D3
+                  1.841, 0.633, 2.345, 3.049, 1.875 # D7
+                  ))
+
+wilcox.test(x = mri.data$VolLesion[mri.data$mcao == '1DPI'],
+            y = mri.data$VolLesion[mri.data$mcao == '7DPI'], conf.int = T)
+wilcox.test(x = mri.data$VolLesion[mri.data$mcao == '1DPI'],
+            y = mri.data$VolLesion[mri.data$mcao == '3DPI'], conf.int = T)
+wilcox.test(x = mri.data$VolLesion[mri.data$mcao == '3DPI'],
+            y = mri.data$VolLesion[mri.data$mcao == '7DPI'], conf.int = T) #pvalue = 0.008
+
+mri.summary <- mri.data %>% 
+  group_by(mcao) %>% 
+  summarise(VolSD = sd(VolLesion),
+            VolLesion = mean(VolLesion))
+
+(ggplot(data = mri.data, aes(y = VolLesion, x = mcao)) + 
+  geom_bar(data = mri.summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = 'orange') +
+  geom_jitter(position = position_jitter(0.2), color = 'black', size= 2, shape = 1, stroke = 0.75) +
+  geom_linerange(data = mri.summary, aes(ymin = VolLesion-VolSD, ymax = VolLesion+VolSD), colour="black", alpha=0.9, size=0.7) +
+  ylim(0, 25) +
+  theme(text = element_text(family = "OpenSans", size = 28), 
+        axis.text.x = element_text(face = "bold", vjust = 1, size = 30, family = "OpenSans"),
+        axis.text.y = element_text(size = 30, family = "OpenSans"),
+        axis.title.y = element_text(size = 40, family = "OpenSans"),
+        axis.ticks = element_blank(),
+        panel.background = element_blank(), #transparent panel bg
+        plot.background = element_rect(fill='white'), #transparent plot bg
+        plot.margin = unit(c(0.2, 1.5, 0.2, 0.2), "cm"),
+        panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2)) +  
+        xlab("") + ylab(expression(paste("Lesion Volume [",mm^3, "]")))) %>% ggsave(filename = file.path(ws, "Barplot_MRILesionVolume.tiff"), device = "tiff", dpi = 300, width = 3, height = 4.5)
+```
+
+```{r sessionInfo }
+sessionInfo()
+```
+

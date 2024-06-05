@@ -1,0 +1,522 @@
+---
+title: "2V_03_Fig3_CCI_Apoe_Trem2"
+author: "DanielZucha"
+date: "2024-05-06"
+output: html_document
+---
+
+Hello, 
+
+In this Figure we will have a closer look at cell-cell interactions where glia on the lesion periphery are on the receiving end. As an exemplary case, we choose the most abundant CCI under these conditions, that being of Apoe-Trem2. Given that OLs are the most active providers of Apoe in our dataset, we look at consequences they bring to microglia. 
+
+This script is a follow up to the data processing in 1DP_06_MCAO_spatial_cell_cell_interactions_SpaTalk_periphery.Rmd.
+
+load libraries
+```{r libraries}
+# day-to-day libraries
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(openxlsx)
+library(magrittr)
+library(stringr)
+library(patchwork)
+
+# deconvolution and CCI
+library(SpaTalk)
+
+# visual
+library(grid)
+library(ggrepel)
+
+# set for SpaTalk to operate properly
+options(Seurat.object.assay.version = 'v3')
+
+# sourcing custom functions and color palettes
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+# ws
+if(!dir.exists("results/PNAS/Fig03")){dir.create("results/PNAS/Fig03")
+  ws <- "results/PNAS/Fig03"}else{ws <- "results/PNAS/Fig03"}
+
+
+# lists for storing results
+plot.list <- list()
+result.list <- list()
+```
+
+load data
+```{r load data}
+# load spatial dataset containing RCTD, GO and Apoe-Trem2 data
+spatial.seurat <- readRDS(file.path("data", "seurat_spatial_1DP_06.Rds"))
+
+# results
+load(file = file.path("data", "SpaTalk_RefZeng2023_MCAO_spatial_full_Ctrl.Rdata")) ## adds full_spatalk object as cci in ctrl cortex
+load(file = file.path("data", "ResultList_1DP_06.Rdata")) ## lesion periphery cci
+load(file = file.path("data", "BulkResults_1DP_07.Rdata")) ## bulk
+
+# misc
+sections <- c("1DPI", "3DPI", "7DPI")
+```
+
+CCI interactions with glia as receivers in the lesion periphery
+```{r CCI interactions with glia as receivers}
+# stacked barplot by cell type sender
+top_glia_lr_senders_summary <- result.list[["top_glia_lr_senders_summary"]]
+plot.list[["Top_LRpairs_Glia_bySender"]] <- top_glia_lr_senders_summary %>% 
+  ggplot(aes(x = LRpair, y = total_lr_co_exp_num, fill = celltype_sender)) + 
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label = ifelse(total_lr_co_exp_num > 1000, total_lr_co_exp_num, "")), 
+            position = position_stack(vjust = 0.5), size = 3, color = "black") +
+  scale_fill_manual(values = col.list$zeng.cols, 
+                    guide = guide_legend(nrow = 20)) +
+  labs(
+    title = NULL,
+    x = "Ligand-Receptor Pair",
+    y = "Total Interactions",
+    fill = "Cell Type Ligand"
+  ) +
+  theme_mk + 
+  theme(legend.position = "right", 
+        legend.justification = c(0.5, 0.5), 
+        axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  plot_layout_mm(width = 90, height = 70)
+
+
+print(plot.list[["Top_LRpairs_Glia_bySender"]])
+png_save_show(plot = plot.list[["Top_LRpairs_Glia_bySender"]], 
+              file = file.path(ws, "Top_LRpairs_Glia_bySender.png"), 
+              dpi = 1000)
+
+
+# stacked barplot by glial receiver
+top_glia_lr_receivers_summary <- result.list[["top_glia_lr_receivers_summary"]]
+plot.list[["Top_LRpairs_Glia_byReceiver"]] <- top_glia_lr_receivers_summary %>% 
+  ggplot(aes(x = LRpair, y = total_lr_co_exp_num, fill = celltype_receiver)) + 
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label = ifelse(total_lr_co_exp_num > 1000, total_lr_co_exp_num, "")), 
+            position = position_stack(vjust = 0.5), size = 3, color = "white") +
+  scale_fill_manual(values = col.list$zeng.cols, 
+                    guide = guide_legend(nrow = 1)) +
+  labs(
+    title = NULL,
+    x = "Ligand-Receptor Pair",
+    y = "Total Interactions",
+    fill = "Cell Type Receptor"
+  ) +
+  theme_mk +
+  theme(legend.position = c(0.7, 0.9), 
+        axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  plot_layout_mm(width = 90, height = 70)
+
+print(plot.list[["Top_LRpairs_Glia_byReceiver"]])
+png_save_show(plot = plot.list[["Top_LRpairs_Glia_byReceiver"]], 
+              file = file.path(ws, "Top_LRpairs_Glia_byReceiver.png"), 
+              dpi = 1000)
+```
+
+Number of Apoe-Trem2 interactions in ctrl cortex vs lesion periphery
+```{r CCI interactions with glia as receivers}
+apoe_trem_ctrl <- full_spatalk@lrpair %>% 
+  filter(ligand == "Apoe" & receptor == "Trem2") %>% 
+  mutate(Condition = rep("Ctrl", length.out = nrow(.)), 
+         LRpair = factor(paste0(ligand, "-", receptor))) %>% 
+  group_by(Condition, LRpair) %>% 
+  summarise(
+    total_lr_co_exp_num = sum(lr_co_exp_num),
+    .groups = "drop"
+  )
+
+apoe_trem_conditions <- result.list[["top_glia_lr_condition_summary"]] %>% 
+  filter(LRpair %in% c("Apoe-Trem2")) %>% 
+  bind_rows(apoe_trem_ctrl) %>% 
+  mutate(Condition = factor(Condition, levels = c("Ctrl", sections)))
+
+
+main_plot <- apoe_trem_conditions %>% 
+  ggplot(aes(x = Condition, y = total_lr_co_exp_num, fill = Condition)) + 
+  geom_bar(stat = "identity", width = 0.7) + 
+  geom_text(aes(label = total_lr_co_exp_num), 
+            vjust = ifelse(apoe_trem_conditions$total_lr_co_exp_num == max(apoe_trem_conditions$total_lr_co_exp_num), 1.5, -0.5), 
+            color = "black", size = 2.45) +
+  scale_fill_manual(values = col.list$Condition) +
+  labs(x = NULL, y = "Total Apoe-Trem2 LR pairs") + 
+  scale_y_continuous(breaks = seq(0, 5000, by = 2500)) + 
+  theme_mk + 
+  theme(legend.position = "none")
+
+
+# add explanatory plot above
+ann_plot <- apoe_trem_conditions %>% 
+  ggplot(aes(x = Condition, y = total_lr_co_exp_num, fill = Condition)) + 
+  geom_bar(stat = "identity", width = 0.7) + 
+  ylim(0, 1) + 
+  annotate("text", x = 1, y = 0.5, label = "Cortex", vjust = 0.5, hjust = 0.5, size = 2.45) + 
+  annotate("segment", x = 0.65, xend = 1.35, y = 0.1, yend = 0.1, color = "grey", linewidth = 2) + 
+  annotate("text", x = 3, y = 0.5, label = "Lesion Periphery", vjust = 0.5, hjust = 0.5, size = 2.45) + 
+  annotate("segment", x = 1.65, xend = 4.35, y = 0.1, yend = 0.1, color = "#AF3039", linewidth = 2) + 
+  theme_void() & 
+  NoAxes() & 
+  NoLegend()
+
+
+plot.list[["Apoe_Trem_Conditions"]] <- (ann_plot / main_plot) + plot_layout(heights = c(1,10))
+print(plot.list[["Apoe_Trem_Conditions"]])
+
+png_save_show(
+  plot = plot.list[["Apoe_Trem_Conditions"]], 
+  file = file.path(ws, "Apoe_Trem_Conditions.png"), 
+  dpi = 1000,
+  height = 70, 
+  width = 55
+)
+```
+
+Spatial Plot of the most numerous CCI with glia for receivers: Apoe-Trem2
+```{r SpatialPlot LR Apoe-Trem2}
+plot.list[["SpatialPlot_lr_ApoeTrem2"]] <- spatial.seurat %>% SpatialPlot(
+  features = "Apoe_Trem2_lr_exp", 
+  images = c(sections), 
+  image.alpha = 0.2, 
+  stroke = 0, 
+  crop = T, 
+  ncol = 3, 
+  pt.size.factor = 1.9, 
+  combine = TRUE
+  ) & 
+  theme_mk &
+  remove_grid &
+  NoAxes() & 
+  scale_fill_gradientn(colors = col.list$gradient_grey_to_red, limits = c(0, 5.1)) & 
+  scale_alpha_continuous(range = c(0.75, 1)) & 
+  theme(legend.position = "none")
+
+# plot.list[["SpatialPlot_lr_ApoeTrem2"]] <- plot.list[["SpatialPlot_lr_ApoeTrem2"]] & plot_layout_mm(height = 70, width = 70)
+print(plot.list[["SpatialPlot_lr_ApoeTrem2"]])
+
+png_save_show(
+  plot = plot.list[["SpatialPlot_lr_ApoeTrem2"]], 
+  file = file.path(ws, "SpatialPlot_lr_ApoeTrem2.png"), 
+  dpi = 1000,
+  height = 70
+)
+```
+
+Downstream Apoe-Trem2 affected genes
+```{r downstream affected genes in microglia}
+# unpack the data
+result.list[["downstream_apoe_trem2_genes"]] %>% glimpse
+plot_data <- result.list[["downstream_apoe_trem2_genes"]][["plot_data"]]
+segment_data <- result.list[["downstream_apoe_trem2_genes"]][["segment_data"]]
+label_data <- result.list[["downstream_apoe_trem2_genes"]][["label_data"]]
+
+# Create the connecting dots plot
+plot.list[["Downstream_genes_apoe_trem"]] <- ggplot() + 
+  geom_segment(data = segment_data, aes(x = x, y = y, xend = xend, yend = yend), color = "grey30", linewidth = 0.25) +
+  geom_point(data = plot_data, aes(x = x, y = y, color = Celltype), size = 2, alpha = 1) + 
+  scale_color_manual(values = col.list$zeng.cols) + 
+  geom_label_repel(
+    data = subset(label_data, x < 4),
+    aes(x = x, y = y, label = label, fill = Celltype),  # Adjust 'label' to the correct column if different
+    size = 2.45,
+    box.padding = 0.35, 
+    point.padding = 0.3, 
+    segment.size = 0,
+    min.segment.length = 1, 
+    max.overlaps = Inf
+  ) +
+  scale_fill_manual(values = col.list$zeng.cols) +
+  theme_mk + 
+  remove_grid + 
+  NoAxes() +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank()
+  ) +
+  ggtitle("Apoe-Trem2 downstream gene targets")
+
+# Display the modified plot
+print(plot.list[["Downstream_genes_apoe_trem"]])
+```
+
+Downstream GO processes of Apoe-Trem2 signaling
+```{r downstream GO apoe trem2}
+# create the GO plot
+plot_df <- result.list[["GO_apoe_trem_downstream_df"]]
+plot.list[["GO_downstream_apoe_trem"]] <- plot_df %>% 
+  ggplot(aes(x = Pvalue, y = Description)) +
+  geom_bar(stat = "identity", alpha = 0.7, width = 0.85, fill = col.list$zeng.cols[["Microglia"]]) + 
+  geom_vline(xintercept = 2, linewidth = 0.2, linetype = "dashed") + 
+  geom_text(
+    aes(label = Description),
+    size = 2.45, 
+    hjust = ifelse(plot_df$Pvalue > 15, 1.1, -0.1), 
+    color = ifelse(plot_df$Pvalue > 15, "white", "black")
+  ) +
+  xlab("FDR-adjusted P-value") + 
+  ylab("Gene Ontology") + 
+  ggtitle("Microglia-enriched processes downstream of Apoe-Trem2") + 
+  theme_mk + 
+  remove_grid + 
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+print(plot.list[["GO_downstream_apoe_trem"]])
+```
+
+Enriched processes and cell types in lesion periphery
+```{r heatmap of enriched gene ontologies}
+library(ComplexHeatmap)
+library(viridis)
+library(gridExtra)
+library(circlize)
+library(ggpubr)
+
+# Define graphical elements for the heatmap
+heatmap_data <- result.list[["Heatmap_data_apoe_trem"]]
+
+text_size <- 7
+axis_text_size <- 7
+
+column_annotation = HeatmapAnnotation(
+  block = anno_block(
+    gp = gpar(fill = c("#8491B4CC", "#F4C05B"), col = NA),  # Remove border stroke
+    labels = c("GO Terms", "Celltypes"), 
+    labels_gp = gpar(col = "black", fontsize = text_size)
+  ),
+  annotation_height = unit(5, "mm")  # Make the annotation bar thinner
+)
+
+# Generate the heatmap
+plot.list[["Heatmap_CCI_periphery"]] <- Heatmap(
+  heatmap_data,
+  name = "Mean \nValue",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_row_names = FALSE,
+  show_column_names = TRUE,
+  row_title = "Lesion Periphery",
+  row_title_gp = gpar(fontsize = axis_text_size), 
+  column_title = NULL,
+  col = colorRamp2(seq(0, 1, length.out = 7), viridis(7, option = "rocket", direction = -1)),
+  column_split = factor(c(rep("GO Terms", 8), rep("Celltypes", 4)), levels = c("GO Terms", "Celltypes")),
+  column_gap = unit(5, "mm"),
+  left_annotation = rowAnnotation(labels = anno_text(rownames(heatmap_data), gp = gpar(fontsize = axis_text_size))), 
+  column_names_rot = 60, 
+  column_names_gp = gpar(fontsize = axis_text_size),  # Adjust column names text size
+  top_annotation = column_annotation,
+  width = unit(ncol(heatmap_data) * 10, "mm"),  # Adjust width
+  height = unit(nrow(heatmap_data) * 10, "mm"),  # Adjust height
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(sprintf("%.2f", heatmap_data[i, j]), x = x, y = y, 
+              gp = gpar(col = ifelse(heatmap_data[i, j] < 0.2, "black", "white"), fontsize = text_size))
+  }, 
+  heatmap_legend_param = list(title_gp = gpar(fontsize = text_size), 
+                              labels_gp = gpar(fontsize = text_size))
+)
+
+print(plot.list[["Heatmap_CCI_periphery"]])
+
+# Convert the heatmap to a ggplot-friendly object
+plot.list[["Heatmap_CCI_periphery"]] <- grid.grabExpr(draw(plot.list[["Heatmap_CCI_periphery"]], heatmap_legend_side = "right")) %>%
+  as_ggplot()
+
+print(plot.list[["Heatmap_CCI_periphery"]])
+```
+
+Spatial Plot of the enriched GO terms
+```{r Spatial Plot of enriched GO terms}
+# min_max the GO terms
+spatial.seurat@meta.data %<>% 
+  mutate(across(starts_with("GO_"), 
+                min_max_normalize))
+
+spatial.seurat@meta.data %>% colnames
+
+# The most interesting ones to me are the Glucose metabolic processes
+plot.list[["Spatial_GO_ERK"]] <- spatial.seurat %>% SpatialPlot(
+  features = c("GO_Positive regulation of erk1 and erk2 cascade3"), 
+  images = sections,
+  image.alpha = 0.2, 
+  stroke = 0, 
+  crop = T, 
+  ncol = 1, 
+  pt.size.factor = 1.9, 
+  combine = TRUE
+  ) & 
+  theme_mk &
+  remove_grid &
+  NoAxes() & 
+  NoLegend() &
+  scale_fill_gradientn(colors = col.list$gradient_blue_yellow_red) & 
+  scale_alpha_continuous(range = c(0.75, 1))
+print(plot.list[["Spatial_GO_ERK"]])
+
+plot.list[["Spatial_GO_Chemotaxis"]] <- spatial.seurat %>% SpatialPlot(
+  features = c("GO_Chemotaxis6"), 
+  images = sections,
+  image.alpha = 0.2, 
+  stroke = 0, 
+  crop = T, 
+  ncol = 1, 
+  pt.size.factor = 1.9,
+  combine = TRUE
+  ) & 
+  theme_mk &
+  remove_grid &
+  NoAxes() & 
+  NoLegend() &
+  scale_fill_gradientn(colors = col.list$gradient_blue_yellow_red) & 
+  scale_alpha_continuous(range = c(0.75, 1))
+
+print(plot.list[["Spatial_GO_Chemotaxis"]])
+```
+
+
+# Bulk validation of Apoe-Trem2 interaction
+load bulk results
+
+Stacked barplot of deconvolution results
+```{r stacked barplot bulk deconvo}
+# stacked barplot with error bars and p values from GLM
+plot.list[["Bulk_barplot_deconvo"]] <- cibersort_summary %>% 
+  ggplot(aes(x = group, y = mean, fill = CellType)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", alpha = 0.7, width = 0.8) +
+  geom_errorbar(data = error_bars %>% filter(CellType %in% highlighted_celltypes), 
+                aes(x = group, ymax = cumulative_mean, ymin = cumulative_mean - sd),
+                width = 0.2, color = "black") +
+  scale_fill_manual(values = custom_colors) +
+  labs(x = NULL, y = "Deconvoluted Proportion (%)", fill = "Cell Type") +
+  scale_x_discrete(labels = c("No MCAO", "1DPI", "3DPI", "7DPI")) +
+  theme_mk +
+  theme(legend.position = "bottom") + 
+  expand_limits(x= c(1, 5)) +
+  annotate("text", x = 5, y = 95.25, label = expression(italic("P = 0.4437")), color = "#02818A", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 5, y = 84.65, label = expression(italic("P = 0.0009")), color = "#A50F15", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 5, y = 59.5, label = expression(italic("P = 0.0004")), color = "#307faf", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 5, y = 37.85, label = expression(italic("P = 0.6699")), color = "#8C96C6", size = 2.45, hjust = 1.5)
+
+print(plot.list[["Bulk_barplot_deconvo"]])
+```
+
+How well does spatial and bulk deconvo correlate? 
+```{r bulk vs spatial deconvo scatterplot}
+plot.list[["Scatter_bulk_vs_spatial_deconvo"]] <- merged_data %>% 
+  ggplot(aes(x = spatial_value, y = bulk_value, color = celltype, shape = Condition)) +
+  geom_point(size = 3) +
+  annotate("text", x = 30, y = 60, label = expression(italic(rho[c] == 0.879)), size = 2.45) +
+  labs(title = "Mean Cell Type Proportions per Condition",  x = "Spatial Deconvoluted Proportions", y = "Bulk Deconvoluted proportions", color = "Cell Type", shape = "Condition") +
+  coord_cartesian(xlim = c(0, 70), ylim = c(0, 70)) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey80") + 
+  scale_color_manual(values = col.list$zeng.cols) + 
+  scale_shape_manual(values = c("Ctrl" = 3, "1DPI" = 18, "3DPI" = 17, "7DPI" = 15)) + 
+  scale_x_continuous(trans = "log1p", breaks = c(seq(0, 15, by = 5), seq(20, 80, by = 10))) +
+  scale_y_continuous(trans = "log1p", breaks = c(seq(0, 15, by = 5), seq(20, 80, by = 10))) +
+  theme_mk
+
+print(plot.list[["Scatter_bulk_vs_spatial_deconvo"]])
+```
+
+
+Apoe-Trem2 paired expression
+```{r apoe trem sample coexpression}
+# Paired dotplot with trend lines
+plot.list[["Bulk_apoe_trem_coexpression"]] <- apoe_trem_long %>% 
+  ggplot(aes(x = group, y = value, color = variable, group = SampleName)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_line(position = position_dodge(width = 0.5), alpha = 0.5, color = "grey30") +
+  scale_color_manual(values = c(Trem2 = "#A50F15", Apoe = "#8C96C6")) + 
+  labs(x = NULL, y = "Expression Z-Score", color = "Ligand-Receptor") +
+  scale_x_discrete(labels = c("No MCAO", "1DPI", "3DPI", "7DPI")) + 
+  theme_mk + 
+  theme(legend.position = "bottom") + 
+  annotate("text", x = 2.5, y = 4.5, label = expression(italic("P < 0.0001")), color = "black", size = 2.45, hjust = 0.5)
+
+print(plot.list[["Bulk_apoe_trem_coexpression"]])
+```
+
+Processes found downstream of Apoe-Trems, shown in bulk
+```{r downstream apoe trem processes shown in bulk}
+plot.list[["Bulk_apoe_trem_processes"]] <- 
+  bulk_processes_long %>% 
+  ggplot(aes(x = time, y = value, fill = condition, group = SampleName)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.5), width = 0.5) +
+  facet_wrap(~ process, 
+             ncol = 1, 
+             scales = "free_y", 
+             strip.position = "left", 
+             labeller = as_labeller(c(
+               "GO_Chemotaxis1" = "Chemotaxis", 
+               "GO_Gliogenesis1" = "Gliogenesis", 
+               "GO_Glucose.metabolic.process1" = "Glucose Metabolism", 
+               "GO_Neuron.apoptotic.process1" = "Neuron Apoptosis", 
+               "GO_Positive.regulation.of.cytokine.production1" = "Cytokine Production", 
+               "GO_Positive.regulation.of.erk1.and.erk2.cascade1" = "ERK1 & ERK2 cascade", 
+               "GO_Proteasome.complex1" = "Proteasome Complex", 
+               "GO_Tissue.remodeling1" = "Tissue Remodeling"
+             ))) +  # Facet by process, with each process in a single row
+  labs(x = NULL, y = "Normalized Score", fill = "Injury Status") +
+  theme(
+    text = element_text(size = 14),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text.y = element_text(angle = 0),
+    legend.position = "bottom"
+  ) +
+  scale_fill_manual(values = c("FCI_Control" = "#525475", "FCI_Sham" = "#5F4C62", "FCI_MCAO" = "#D18080")) +
+  scale_y_continuous(breaks = c(0,1)) + 
+  ggtitle(label = "Bulk Transcriptomics: Apoe-Trem2 Downstream Processes") + 
+  theme_mk + 
+  remove_grid + 
+  theme(legend.position = "bottom", 
+        strip.background = element_blank(), 
+        strip.text.y.left = element_text(angle = 0, hjust = 1), 
+        strip.placement = "outside") + 
+  geom_text(data = bulk_processes_stat_results, aes(x = 4.5, y = 0.5, label = significance), hjust = 0.5, vjust = 0.5, size = 2.45, inherit.aes = FALSE)
+
+print(plot.list[["Bulk_apoe_trem_processes"]])
+```
+
+
+
+# Wrapping the plots
+```{r wrapping figure 3, fig.width=12, fig.height=20, dpi=500}
+plot.list[["BlankPlot"]] <- patchwork::plot_spacer()
+
+print(plot.list[["Heatmap_CCI_periphery"]])
+
+plot.list[["Fig3"]] <- patchwork::wrap_plots(plot.list[c(
+  "BlankPlot", # A
+  "Top_LRpairs_Glia_byReceiver", # B
+  "Top_LRpairs_Glia_bySender", # C
+  "Apoe_Trem_Conditions", # D
+  "SpatialPlot_lr_ApoeTrem2", # E
+  "Downstream_genes_apoe_trem", # F
+  "GO_downstream_apoe_trem", # G
+  "Heatmap_CCI_periphery", # H
+  "Spatial_GO_ERK", # I
+  "Spatial_GO_Chemotaxis",  # J
+  "Scatter_bulk_vs_spatial_deconvo", # K
+  "Bulk_barplot_deconvo", # L
+  "Bulk_apoe_trem_coexpression", # M
+  "Bulk_apoe_trem_processes" # N
+)],
+ncol = 8,
+nrow = 8,
+byrow = T,
+design = "AABBCCCD
+          AABBCCCD
+          EEEFFGGG
+          EEEFFGGG
+          HHHHIIJJ
+          HHHHIIJJ
+          KKLLMMNN
+          KKLLMMNN")
+
+print(plot.list[["Fig3"]])
+
+ggsave(plot = plot.list[["Fig3"]], filename = file.path(ws, "Figure3_ws.pdf"), dpi = 500, units = "mm", width = 210, height = 250)
+
+```
+

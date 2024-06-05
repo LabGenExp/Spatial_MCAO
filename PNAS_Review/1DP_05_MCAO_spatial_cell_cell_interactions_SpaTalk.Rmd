@@ -1,0 +1,371 @@
+---
+title: "1DP_05_MCAO_spatial_cell_cell_interactions_SpaTalk"
+author: "Matouš Laitl & Daniel Zucha" 
+date: "2024-03-16"
+output: html_document
+---
+
+Hello, 
+
+In this markdown we aim to compute the cell-cell interactions (CCI) in our spatial data using the [SpaTalk algorithm](https://github.com/ZJUFanLab/SpaTalk). For this, we use the in-house generated spatial data, with cell type presence estimated using reference-based deconvolution RCTD (library(spacexr) by Cable et al).
+
+Input files:
+- "data/seurat_spatial_integrated_ready_rctdZeng2023.rds" # spatial seurat with deconvolution results
+- "data/RCTDlist_scRefZeng2023_fullmode.Rds" # deconvolution results directly from RCTD
+- "data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds" # processed seurat object of the reference single-cell Zeng et al 2023 object
+
+
+loading libraries
+```{r libraries}
+# day-to-day libraries
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(openxlsx)
+library(magrittr)
+library(stringr)
+library(patchwork)
+
+# deconvolution and CCI
+library(spacexr)
+library(SpaTalk)
+
+# visual
+library(circlize)
+library(grid)
+library(ggrepel)
+
+# set for SpaTalk to operate properly
+options(Seurat.object.assay.version = 'v3')
+
+# sourcing custom functions and color palettes
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+# ws
+if(!dir.exists("ws")){dir.create("ws")
+  ws <- "ws"}else{ws <- "ws"}
+
+# lists
+plot.list <- list()
+result.list <- list()
+```
+
+```{r load data}
+# in-house spatial with deconvo results
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready_rctdZeng2023.rds")
+
+# ref Zeng 2023 single-cell seurat
+seurat <- readRDS("data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds")
+seurat %<>% SetIdent(value = "CellTypeClass")
+
+# deconvo results
+# myRCTD.list <- readRDS(file = "data/RCTDlist_scRefZeng2023_fullmode.Rds")
+
+# misc 
+sections <- c("Ctrl", "1DPI", "3DPI", "7DPI")
+ctx_regions <- c("CTX1-4", "CTX5", "CTX6", "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p")
+```
+
+
+First, we start by getting a full overview of the interactome inside the entire ischemic lesions.
+
+Preprocessing spatial dataset for SpaTalk object. For Ctrl section, we will process entire cortex, for others the lesions.
+```{r preprocess ST for SpaTalk}
+prep.list <- sections %>% lapply(\(x){
+  
+  # define the section spots - for Ctrl the entire cortex, for Injured the lesions.
+  if(x == "Ctrl"){
+    section_barcodes <- spatial.seurat@meta.data %>% 
+      filter(Condition %in% x & BrainAreas %in% "Cortex" & nFeature_Spatial > 100) %>% 
+      pull(Barcodes)
+  } else {
+    section_barcodes <- spatial.seurat@meta.data %>% 
+      filter(Condition %in% x & BrainAreas %in% "Lesion" & nFeature_Spatial > 100) %>% 
+      pull(Barcodes)
+  }
+  
+  # cell type names
+  celltype_names <- spatial.seurat@meta.data %>% 
+    colnames %>% 
+    stringr::str_subset(pattern = "^RCTD_")
+  
+  temp_list <- list()
+  
+  # secion's count matrix 
+  temp_list[["counts"]] <- spatial.seurat %>% 
+    Seurat::GetAssayData(assay = "Spatial", layer = "counts") %>% 
+    .[, section_barcodes]
+  colnames(temp_list[["counts"]]) <- colnames(temp_list[["counts"]]) %>% 
+    stringr::str_replace(pattern = "-", replacement = "_")
+  
+  # sections coordinate metadata
+  temp_list[["md"]] <- spatial.seurat@images[[x]]@coordinates[,c("imagecol", "imagerow")] %>% 
+    rename(
+      x = imagecol, 
+      y = imagerow
+    ) %>% 
+    rownames_to_column("spot") %>% 
+    filter(spot %in% section_barcodes) %>% 
+    mutate(spot = stringr::str_replace(spot, pattern = "-", replacement = "_")) %>%
+    slice(match(temp_list[["counts"]] %>% colnames, spot))
+  
+  ## order md if needed
+  temp_list[["md"]] <- temp_list[["md"]][, ]
+  
+  # deconvolution results
+  temp_list[["result"]] <- spatial.seurat@meta.data %>% 
+    select(all_of(starts_with("RCTD_"))) %>% 
+    rownames_to_column(var = "Barcodes") %>% 
+    filter(Barcodes %in% section_barcodes) %>% 
+    mutate(Barcodes = stringr::str_replace(Barcodes, pattern = "-", replacement = "_")) %>%
+    slice(match(temp_list[["counts"]] %>% colnames, Barcodes)) %>% 
+    column_to_rownames("Barcodes") %>% 
+    rename_with(~ gsub("RCTD_", "", .x)) %>% 
+    as.matrix
+  
+  return(temp_list)
+})
+
+names(prep.list) <- sections
+```
+
+Creating SpaTalk object
+```{r create spatalk object}
+spatalk.list <- prep.list %>% lapply(\(x){
+  object <- createSpaTalk(
+    st_data = x[["counts"]],
+    st_meta = x[["md"]],
+    species = "Mouse",
+    if_st_is_sc = FALSE,
+    spot_max_cell = 20
+  )
+  return(object)
+})
+```
+
+Preprocessing single-cell data for SpaTalk
+```{r preprocessing SC for SpaTalk}
+result.list[["sc_data"]] <- seurat %>% GetAssayData(assay = "RNA", layer = "counts")
+result.list[["sc_celltype"]] <- seurat@meta.data$CellTypeClass %>% as.character()
+
+rm(seurat)
+gc()
+```
+
+Save the files and run the following steps of the SpaTalk pipeline on the background (`dec_celltype()`, `find_lr_path()`, `dec_cci_all()`; they are computationally expensive both in time and memory).
+```{r moving to a background job}
+save(spatalk.list, result.list, prep.list, file = file.path("data", "1DP_05_MCAO_dec_celltype_background.Rdata"))
+# Move to the background job by running "OF_05_MCAO_SpaTalk_dec_celltype_background.R"
+# The output are named as "SpaTalk_RefZeng2023_MCAO_spatial_full_xxxx.Rdata", for each section separately to make the object read and load more efficient.
+```
+
+After the SpaTalk calculations are finished , we load the results.
+```{r load full SpaTalk objects}
+spatalk.list <- list()
+for(section in sections){
+  load(file = file.path("data", paste0("SpaTalk_RefZeng2023_MCAO_spatial_full_", section, ".Rdata")))
+  spatalk.list[[section]] <- full_spatalk
+}
+
+rm(section, full_spatalk)
+```
+
+```{r visualize the spatalk results}
+#
+plot_st_pie(object = spatalk.list[[4]], 
+            color = col.list$zeng.cols, 
+            pie_scale = 0.4)
+```
+
+Scrape the results of significant mutual interactions to create a general view.
+```{r count the number of communications}
+section <- "7DPI"
+
+# absolute sum of L-R pairs
+lrpairs <- 
+  spatalk.list[[section]]@lrpair %>% 
+  group_by(celltype_sender, celltype_receiver) %>% 
+  summarise(
+    total_lr_co_exp_num = sum(lr_co_exp_num), 
+    .groups = "drop"
+  )
+
+lrpairs %>% circlize::chordDiagram(
+  grid.col = col.list$zeng.cols, 
+  directional = 1, 
+  reduce = 0.05)
+
+# Function to create a single chord diagram
+create_chord_diagram <- function(dec_spatalk_obj, section) {
+  
+  # summarize the 
+  lrpairs <- dec_spatalk_obj@lrpair %>% 
+    group_by(celltype_sender, celltype_receiver) %>% 
+    summarise(
+      total_lr_co_exp_num = sum(lr_co_exp_num), 
+      .groups = "drop"
+    )
+  
+  circlize::chordDiagram(
+    lrpairs, 
+    grid.col = col.list$zeng.cols, 
+    directional = 1, 
+    reduce = 0.043, 
+    annotationTrack = "grid", 
+    preAllocateTracks = list(track.height = 0.05)
+  )
+  
+  circos.track(
+    track.index = 1, 
+    panel.fun = function(x, y) {
+      circos.text(CELL_META$xcenter, 
+                  CELL_META$ylim[1] + 0.5, # moving the text slightly further away
+                  CELL_META$sector.index, 
+                  facing = "bending.outside", 
+                  niceFacing = TRUE)
+    }, 
+    bg.border = NA
+  ) # here set bg.border to NA is important
+  
+  title(section, line = -3)
+  circos.clear()
+}
+
+
+# Create a layout for 4 plots side by side
+layout(matrix(1:4, 1, 4))
+
+# Loop to create and position each plot
+for(i in seq_along(sections)) {
+  par(mar = c(0.5, 0.5, 0.5, 0.5))
+  circos.par(cell.padding = c(0,0,0,0))
+  create_chord_diagram(
+    dec_spatalk_obj = spatalk.list[[i]], 
+    section = sections[i])
+}
+
+
+{
+  lrpairs %>% circlize::chordDiagram(
+    grid.col = col.list$zeng.cols, 
+    directional = 1, 
+    reduce = 0.05, 
+    annotationTrack = "grid", 
+    preAllocateTracks = list(track.height = 0.05))
+  
+  circos.track(
+    track.index = 1, 
+    panel.fun = function(x, y) {
+      circos.text(CELL_META$xcenter, 
+                  CELL_META$ylim[1], CELL_META$sector.index, 
+          facing = "bending.outside", niceFacing = TRUE)
+      }, bg.border = NA) # here set bg.border to NA is important
+  title(section)
+  circos.clear()
+}
+
+```
+
+What ligand is the most active
+```{r most abundant ligand}
+ligand_summary <- sections %>% lapply(\(x){
+  temp <- spatalk.list[[x]]@lrpair %>% 
+    group_by(ligand) %>% 
+    summarise(
+      total_interactions = sum(lr_co_exp_num), 
+      unique_celltypes_expressing = n_distinct(celltype_sender),
+      ) %>% 
+    ungroup %>% 
+    mutate(Condition = rep(x, times = nrow(.)))
+  
+  return(temp)
+}) %>% 
+  bind_rows()
+
+
+top_10_ligands <- ligand_summary %>% 
+  group_by(ligand) %>% 
+  summarize(total_interactions_all_conditions = sum(total_interactions)) %>% 
+  arrange(desc(total_interactions_all_conditions)) %>% 
+  head(10) %>% 
+  pull(ligand)
+
+top_10_labels <- ligand_summary %>% 
+  filter(ligand %in% top_10_ligands) %>% 
+  # group_by(ligand) %>% 
+  slice_max(order_by = total_interactions, n = 20) %>% 
+  ungroup
+
+
+# create the plot
+ggplot(ligand_summary, aes(x = total_interactions, y = unique_celltypes_expressing, color = Condition)) +
+  geom_point() +
+  # scale_x_log10() +
+  geom_text(data = top_10_labels, aes(label = ligand), vjust = -1, size = 3) +
+  scale_color_manual(values = col.list$Condition) +
+  labs(
+    title = "Ligand Interactions and Cell Type Expression",
+    x = "Number of Interactions",
+    y = "Number of Unique Cell Types Expressing Ligand"
+  ) +
+  theme_minimal()
+
+
+
+# 
+spatalk.list[[section]]@lrpair %>% 
+  filter(ligand %in% "Spp1")
+
+temp <- spatalk.list[[section]]@lrpair %>% 
+  filter(celltype_sender %in% "OLs") %>% 
+  group_by(ligand, celltype_receiver) %>% 
+  summarise(total_OL_interactions = sum(lr_co_exp_num ), 
+            .groups = "drop") %>% 
+  arrange(desc(total_OL_interactions))
+
+```
+
+How many LR pairs are found and how many cell types are using it?
+```{r abundance and specificity of LR pairs}
+ligand_summary_lr <- sections %>% lapply(\(x){
+  temp <- spatalk.list[[x]]@lrpair %>% 
+    mutate(Condition = rep(x, times = nrow(.)), 
+           CellPair = paste0(celltype_sender, "-", celltype_receiver)) %>% 
+    group_by(ligand, receptor, Condition) %>% 
+    summarise(
+      total_interactions = sum(lr_co_exp_num), 
+      unique_celltype_interactions = n_distinct(CellPair), 
+      .groups = "drop"
+      ) %>% 
+    ungroup %>% 
+    mutate(LRPair = paste0(ligand, "-", receptor))
+  
+  return(temp)
+}) %>% bind_rows()
+
+result.list[["top_5_pairs_per_condition"]] <- ligand_summary_lr %>% 
+  group_by(Condition) %>% 
+  slice_max(order_by = total_interactions,  n = 5) %>% 
+  ungroup()
+
+
+result.list[["high_interaction_pairs"]] <- ligand_summary_lr %>% 
+  filter(total_interactions > 6000 | unique_celltype_interactions > 50)
+
+# Create the plot
+ggplot(ligand_summary_lr, aes(x = total_interactions, y = unique_celltype_interactions, color = Condition)) +
+  geom_point() +
+  # scale_x_log10() +
+  geom_text_repel(data = result.list[["high_interaction_pairs"]], aes(label = LRPair), size = 3, max.overlaps = Inf) +
+  scale_color_manual(values = col.list$Condition) +
+  labs(
+    title = "Ligand-Receptor Interactions and Cell Type Presence Across Conditions",
+    x = "Number of Interactions (log scale)",
+    y = "Number of Unique Cell Type Interactions"
+  ) +
+  theme_mk
+```
+

@@ -1,0 +1,485 @@
+---
+title: "MCAO_Integration"
+author: "Daniel Zucha"
+date: "1/2/2023"
+output: html_document
+---
+
+Markdown for the integration of the Ctrl and 1-3-7 DPI sections. First for the whole brain sections, second for the cortical area only. Ultimately, the annotation from these datasets was merged to create a unified annotation with a more detailed description of the lesion area.
+
+Notes on using this script for analysis:
+- This markdown is made for an analysis in a chunk-by-chunk format, knitting will not work. 
+- The structure of this work assumes running an R project in a dedicated folder, e.g. named 'Spatial'. Inside, a structure of few subfolders is needed. One subfolder named 'orig' for the original data that are kept untouched for the entire analysis, only used for loading. Second, a subfolder named 'data' for the input .Rds files and others. Thirdly, a subfolder for named 'results' for the analysis outputs.
+
+
+Files:
+- essential input files: 
+    - Sample files: "20210323_10x_Spatial1_and_lesion_snRNA/samples.csv", "20211208_10x_Spatial2_and_lesion_scRNA/samples.csv"
+    - SpaceRanger output: "/'sample_name'/filtered_feature_bc_matrix.h5"
+    - Rds: "orig/seurat_1stSpatial.rds", "orig/seurat_2ndSpatial.rds"
+- output files: "seurat_spatial_integrated_ready.Rds"
+
+=== Essential chunks, load every time before running parts of the script. ===
+
+```{r libraries}
+library(Seurat); library(SeuratWrappers); library(dplyr); library(ggplot2); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr); library(stringr)
+```
+
+```{r misc}
+library(showtext); font_add_google(name = "Open Sans", family = "OpenSans"); showtext_auto(); plot.font <- "OpenSans" # custom font for ggplots
+
+## custom color list
+col.list <- list()
+col.list[["ctrl_cols"]] <- c("Isocortex L1-4" = "#EBCC2A", "Isocortex L5" = "#E58601", "Isocortex L6" = "#70ACE0", "GLS" = "#AD5248", "Lateral ventricle"  = "#DD8D29", "Hippocampus" = "#E6A0C4", "Fiber Tracts" = "#6F8E78", "Caudoputamen" = "#F8AFA8", "Thalamus" = "#7294D4", "Hypothalamus" =  "#E1AF00", "Amygdalar nuclei" = "#46ACC8", "Cortical subplate" = "#899DA4", "Piriform area" = "#C27D38")
+
+col.list[["detailed_cols"]] <- c("Amygdalar area" = "#46ACC8", "Caudoputamen" = "#F8AFA8", "Cortical subplate" = "#899DA4", "Fiber tracts" = "#6F8E78", "GLS" = "#AD5248", "Hippocampus" = "#E6A0C4", "Hypothalamus" = "#E1AF00", "Ischemic area D1 center" = "#FAF1DB", "Ischemic area D1 periphery" = "#667776", "Ischemic area D3 center" = "#EE6C4D", "Ischemic area D3 periphery" = "#6A5491",  "Ischemic area D7 center" = "#19888C", "Ischemic area D7 periphery" =  "#485570" , "Isocortex L1-4" = "#EBCC2A", "Isocortex L5" = "#E58601", "Isocortex L6" = "#70ACE0", "Lateral isocortex L4/5" = "#ECB365", "Lateral isocortex L6" = "#293051", "Lateral ventricle" = "#DD8D29", "Pallidum" = "#034F1B", "Piriform area" = "#C27D38", "Thalamus" = "#7294D4")
+
+col.list[["cols_mono"]] <- c("Amygdalar area" = "#D0D0CA", 
+               "Caudoputamen" = "#A1A19C", 
+               "Cortical subplate" = "#B1B1AC", 
+               "Fiber tracts" = "#F0EFE2", 
+               "GLS" = "#A1A19C", 
+               "Hippocampus" = "#A1A19C", 
+               "Hypothalamus" = "#B1B1AC", 
+               "Ischemic area D1 center" = "#F8EFF1", 
+               "Ischemic area D1 periphery" = "#E7A9B1", 
+               "Ischemic area D3 center" = "#F1D2D4", 
+               "Ischemic area D3 periphery" = "#AF3039",  
+               "Ischemic area D7 center" = "#C65E6A", 
+               "Ischemic area D7 periphery" =   "#7B1113", 
+               "Isocortex L1-4" = "#B1B1AC", 
+               "Isocortex L5" = "#D0D0CA", 
+               "Isocortex L6" = "#C1C0BB", 
+               "Lateral isocortex L4/5" = "#C1C0BB", 
+               "Lateral isocortex L6" = "#D0D0CA", 
+               "Lateral ventricle" = "#B1B1AC", 
+               "Pallidum" = "#D0D0CA", 
+               "Piriform area" = "#C1C0BB", 
+               "Thalamus" = "#C1C0BB");
+
+col.list[["cols_mono_short"]] <- c("AMY" = "#D0D0CA", "CP" = "#A1A19C", "CS" = "#B1B1AC", "FT" = "#F0EFE2", "GLS" = "#A1A19C", "HIP" = "#A1A19C", "HY" = "#B1B1AC", "ISD1c" = "#F8EFF1", "ISD1p" = "#E7A9B1", "ISD3c" = "#F1D2D4", "ISD3p" = "#AF3039",  "ISD7c" = "#C65E6A", "ISD7p" =   "#7B1113", "CTX1-4" = "#B1B1AC", "CTX5" = "#D0D0CA", "CTX6" = "#C1C0BB", "lCTX4-5" = "#C1C0BB", "lCTX6" = "#D0D0CA", "LV" = "#B1B1AC", "PAL" = "#D0D0CA", "PIR" = "#C1C0BB", "TH" = "#C1C0BB")
+
+
+```
+
+```{r file folder loc}
+if(!dir.exists("results/SpatialFigures/")){dir.create("results/SpatialFigures/")}
+if(!dir.exists("results/SpatialFigures/Figure2")){dir.create("results/SpatialFigures/Figure2"); ws <- "results/SpatialFigures/Figure2"}else{ws <- "results/SpatialFigures/Figure2"}
+```
+
+=== Whole brain ===
+
+Sample files loading
+```{r Sample files loading}
+samples1 <-read.table("/data/20210323_10x_Spatial1_and_lesion_snRNA/samples.csv",header=TRUE,sep=",") %>% .[c(2,4,3),]
+samples2 <-read.table("/data/20211208_10x_Spatial2_and_lesion_scRNA/samples.csv",header=TRUE,sep=",") %>% .[c(5:6),]
+```
+
+Creating Seurat objects from scratch. Mind that the path needs to be modified to the location of the downloaded files. However, the resulting Rds files can be also downloaded from the Mendeley Data repository . 
+```{r seurat objects from SpaceRangerOutput}
+seurat1 <- as.list(NULL)
+for(i in 1:nrow(samples1)) {
+  seurat1[[i]] <- Load10X_Spatial(data.dir = paste0("/RNAseq_data/10x_Spatial_and_lesion/spatial/", samples1$SampleName[i],"/outs"),
+                                 filename = "filtered_feature_bc_matrix.h5",
+                                 assay = "Spatial",
+                                 slice = samples1$Condition[i],
+                                 filter.matrix = TRUE,
+                                 to.upper = FALSE)
+  seurat1[[i]]$orig.ident <- paste0("Spatial_",samples1$Condition[i])
+  seurat1[[i]]$Sample <- samples1$SampleName[i]
+  seurat1[[i]]$Condition <- samples1$Condition[i]
+}
+saveRDS(seurat1, file = "orig/seurat_1stSpatial.rds") # the raw SpaceRanger output file for the first ST
+
+seurat2 <- as.list(NULL)
+for(i in 1:nrow(samples2)) {
+  seurat2[[i]] <- Load10X_Spatial(data.dir = paste0("RNAseq_data/10x_Spatial_and_lesion_2/Spaceranger_output/", samples2$SampleName[i],"/outs"),
+                                 filename = "filtered_feature_bc_matrix.h5",
+                                 assay = "Spatial",
+                                 slice = samples2$Condition2[i],
+                                 filter.matrix = TRUE,
+                                 to.upper = FALSE)
+  seurat2[[i]]$orig.ident <- paste0("Spatial2_",samples2$Condition2[i])
+  seurat2[[i]]$Sample <- samples2$SampleName[i]
+  seurat2[[i]]$Condition <- samples2$Condition2[i]
+}
+saveRDS(seurat2, file = "orig/seurat_2ndSpatial.rds")  # the raw SpaceRanger output file for the second ST
+```
+
+SCTransform, each batch separately.
+```{r separate batch transformation}
+seurat1 <- readRDS("orig/seurat_1stSpatial.rds"); seurat1_merge <- merge(seurat1[[1]], y = c(seurat1[[2]], seurat1[[3]])) # there is a warning that enforces the unique cell names.
+seurat2 <- readRDS("orig/seurat_2ndSpatial.rds"); seurat2_merge <-  merge(seurat2[[1]], y = seurat2[[2]])
+rm(seurat1, seurat2); gc()
+
+if((((seurat1_merge %>% rownames) %in% (seurat2_merge %>% rownames)) %>% all) == TRUE){
+  all.genes <- seurat1_merge %>% rownames
+}else{
+  print0("The genes sets do not match!")
+}
+
+st.list <- list(ST1 = seurat1_merge, ST2 = seurat2_merge)
+st.list <- lapply(st.list, SCTransform, assay = "Spatial", verbose = TRUE, method = "poisson", return.only.var.genes = F, variable.features.n = NULL, n_genes = NULL) # May take some time to run. RAM heavy
+saveRDS(st.list, file = "data/SpatialList_SCTranform.Rds")
+```
+
+Integration of the two Seurat batches
+```{r Integration}
+st.list <- readRDS("data/SpatialList_SCTranform.Rds")
+all.genes <- st.list[["seurat1_merge"]] %>% rownames() ## use on of the seurat's gene lists (the gene lists are identical for the two seurats, see previous chunk)
+
+options(future.globals.maxSize = 6000 * 1024^2)
+st.features = SelectIntegrationFeatures(st.list, nfeatures = 5000, verbose = TRUE)
+st.list <- PrepSCTIntegration(object.list = st.list, anchor.features = st.features, verbose = TRUE); gc()
+int.anchors <- FindIntegrationAnchors(object.list = st.list, normalization.method = "SCT", 
+    verbose = TRUE, anchor.features = st.features); rm(st.list); gc()
+brain.integrated <- IntegrateData(anchorset = int.anchors, normalization.method = "SCT", 
+    verbose = TRUE, features.to.integrate = all.genes)
+saveRDS(brain.integrated, file = "data/brain_integrated.Rds")
+```
+
+```{r loading after the integration}
+seurat_int <- readRDS(file = "data/brain_integrated.Rds")
+seurat_int$Condition %<>% factor(levels = unique(.))
+seurat_int %<>% SetIdent( value = "Condition")
+```
+
+Dimensionality reduction, Clustering, Annotation into brain regions
+```{r Dim Reduction, Clustering}
+all.genes <- seurat_int@assays$integrated %>% rownames
+all.genes.no.mito <- all.genes[grep("mt-", all.genes, ignore.case = T, invert = T)] ## excluding mito genes
+
+seurat_int <- RunPCA(seurat_int, npcs = 100, verbose = FALSE, features = all.genes.no.mito, reduction.name = "pca") # mito genes are excluded from clustering
+PCAPlot(seurat_int, reduction = "pca", label = TRUE)
+
+ElbowPlot(seurat_int, ndims = 100)
+DimHeatmap(seurat_int, dims = 10:40, cells = 500, balanced = TRUE)
+
+nDims <- 30
+seurat_int <- RunUMAP(seurat_int, reduction = "pca", dims = 1:nDims, verbose = FALSE, umap.method = 'umap-learn')
+UMAPPlot(seurat_int, label = TRUE)
+seurat_int <- FindNeighbors(seurat_int, reduction = "pca", dims = 1:nDims, verbose = FALSE)
+seurat_int <- FindClusters(seurat_int, resolution = 1, verbose = FALSE, algorithm = 4) # resolution = 1, and Leiden algorithm was selected, yielding 27 clusters.
+UMAPPlot(seurat_int, label = TRUE)
+SpatialPlot(seurat_int, image.alpha = 0.4, label = T, crop = F, combine = T, pt.size.factor = 1.35)
+
+UMAPPlot(seurat_int, label = TRUE, group.by = "Condition")
+seurat_int$Batches <- seurat_int$Condition %>% as.character() %>% stringr::str_replace_all(c("D1" = "Batch1", "D3" = "Batch1", "D7$" = "Batch1", "sham" = "Batch2", "D7b" = 'Batch2')) %>% as.factor()
+UMAPPlot(seurat_int, label = TRUE, group.by = "Batches")
+
+SpatialPlot(seurat_int, image.alpha = 0.4,  label = TRUE, crop = F, label.size = 3, repel = T, combine = T, pt.size.factor = 1.5)
+
+## anotating the clusters
+seurat_int %<>% PrepSCTFindMarkers()
+markers.all <- FindAllMarkers(seurat_int, assay = 'SCT', logfc.threshold = 0.58, min.pct = 0.1, only.pos = F, verbose = T) %>% split(f = .[["cluster"]])
+
+seurat_int %<>% SetIdent(value = "integrated_snn_res.1")
+seurat_int <- RenameIdents(seurat_int,
+                                   '1' = "Thalamus",
+                                   '2' = "Lesion Day 1",
+                                   '3' = "Fiber tracts",
+                                   '4' = "Hypothalamus",
+                                   '5' = "Isocortex L1-3",
+                                   '6' = "Amygdalar area",
+                                   '7' = "Isocortex L4-6",
+                                   '8' = "Cortical subplate",
+                                   '9' = "Isocortex L4-6",
+                                   '10' = "Lesion Day 3",
+                                   '11' = "Piriform area",
+                                   '12' = "Caudoputamen",
+                                   '13' = "Fiber tracts",
+                                   '14' = "Pallidum",
+                                   '15' = "Lesion Day 7",
+                                   '16' = "Caudoputamen", 
+                                   '17' = "Hypothalamus", 
+                                   '18' = "Thalamus", 
+                                   '19' = "Isocortex L4-6",
+                                   '20' = "Isocortex L1-3",
+                                   '21' = "Isocortex L4-6",
+                                   '22' = "GLS",
+                                   '23' = "Fiber tracts",
+                                   '24' = "Lateral ventricle",
+                                   '25' = "Thalamus",
+                                   '26' = "Caudoputamen",
+                                   '27' = "Hippocampus"
+)
+seurat_int$IntegratedAnno <- seurat_int@active.ident
+saveRDS(seurat_int, file = "data/brain_integrated_dimred_anno.Rds")
+```
+
+Inspecting quality control metrics
+```{r QC metrics - spatial and vln plots}
+spatial.seurat <- readRDS(file = "data/brain_integrated_dimred_anno.Rds"); col.list[["cols_mono_short"]] <- col.list[["cols_mono"]]; names(col.list[["cols_mono_short"]]) <- spatial.seurat$DetailedRegionAnnoShort %>% levels; library(cowplot)
+
+features <- c("nCount_Spatial", "nFeature_Spatial", "percent.mt", "percent.rib") # QC features of interest
+spatial.seurat[[features]] %>% summary %>% print # value summary; defines legend min&max
+
+## prints out side-by-side SpatialPlot with VlnPlot
+p <- list(); for(x in c("sham", "D1", "D3", "D7", "D7b")){
+  for(i in seq_along(features)){
+  qcname <- c("nCount", "nFeature", "percentMT", "percentRIB")
+  labs.fill <- c("total RNA count  ", "Gene count  ", "mito RNA [%]  ", "ribosomal RNA [%]  ")
+  limits <- list(c(100, 90000), c(100, 10000), c(0, 40), c(0, 25))
+  
+  p1 <- SpatialPlot(spatial.seurat, features = features[i], image.alpha = 0.2, ncol = 1, crop = F, pt.size.factor = 1.35, images = x) & 
+    ggplot2::scale_fill_viridis_c(option = "A", direction = 1, limits = limits[[i]], begin = 0.2) & 
+    labs(fill = labs.fill[i]) & 
+    theme(text = element_text(family = "OpenSans", size = 10), plot.margin = unit(c(0,0,0,0), "cm"))
+  
+  p2 <- VlnPlot(subset(spatial.seurat, subset = Condition == x), features = features[i], group.by = "DetailedRegionAnnoShort", ncol = 1, pt.size = 0, cols = col.list[["cols_mono_short"]], flip = F) & coord_flip() & scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) & 
+    xlab("") & expand_limits(y= limits[[i]]) & labs(title = "") & 
+  theme(axis.text.x = element_text(angle = 30, size = 7.5, hjust = 0.7, vjust = 0.8), 
+        text = element_text(family = "OpenSans", size = 16), 
+        legend.text = element_text(family = "OpenSans"), 
+        legend.position = "none", plot.margin = unit(c(0.8, 0.3, 0.3, 0), "cm"))
+  p[[paste0(x, "_", qcname[i])]] <- cowplot::plot_grid(p1, p2, ncol = 2, rel_widths = c(1, 0.5), label_fontfamily = "OpenSans", align = "h") +  theme(plot.background = element_rect(fill = "white", colour = NA)) #%>% ggsave(filename = paste0(ws, "/QCplot_", qcname[i], "_", x, ".tiff"), plot = ., device = "tiff", dpi = 300, height = 5, width = 6.2)
+  }}; cowplot::plot_grid(plotlist = p, ncol = 4, label_fontfamily = "OpenSans") %>% ggsave(filename = file.path(ws, "QCplot_AllSection.tiff") , plot = ., device = "tiff", dpi = 300, width = 19, height = 26)
+  
+```
+
+=== Cortex only ===
+A separate analysis of the cortical area for improved clarity.
+
+Subseting the integrated and annotated seurat for the cortex.
+```{r subset cortex}
+seurat_int <- readRDS(file = "data/brain_integrated_dimred_anno.Rds")
+ctx.regions <- c("Isocortex L1-3", "Isocortex L4-6","Lesion Day 1", "Lesion Day 3", "Lesion Day 7", "GLS", "Piriform area") 
+seurat_ctx <- subset(seurat_int, IntegratedAnno %in% ctx.regions)
+seurat_ctx %>% SpatialPlot(crop = F)
+
+Cells <- Cells(seurat_ctx) ## spot barcodes
+
+ctx.df <- data.frame("Cells" = Cells(subset(seurat_ctx, IntegratedAnno %in% ctx.regions)) %>% str_remove(pattern  = str_sub(string = Cells, start = -2, end = -1)),  # match the names of integrated cells with pre-integration names
+                    "IntegratedAnno" = seurat_ctx$IntegratedAnno[seurat_ctx$IntegratedAnno %in% ctx.regions], # Integrated regions annotation
+                    "Batch" = seurat_ctx$Batches[seurat_ctx$IntegratedAnno %in% ctx.regions]) # Batches of origin
+ctx.list <- split(ctx.df, f = ctx.df$Batch)
+
+# load in the original raw seurat objects
+seurat1 <- readRDS("orig/seurat_1stSpatial.rds")
+seurat2 <- readRDS("orig/seurat_2ndSpatial.rds")
+seurat1_merge <- merge(seurat1[[1]], y = c(seurat1[[2]], seurat1[[3]]))
+seurat2_merge <- merge(seurat2[[1]], y = seurat2[[2]])
+
+
+seurat1_merge <- seurat1_merge %>% .[, Cells(.) %in% ctx.list$Batch1$Cells]
+seurat2_merge <- seurat2_merge %>% .[, Cells(.) %in% ctx.list$Batch2$Cells]
+
+
+st.list <- list(ST1 = seurat1_merge, ST2 = seurat2_merge)
+st.list[["ST1"]]$IntegratedAnno <- ctx.list[[1]]$IntegratedAnno
+st.list[["ST2"]]$IntegratedAnno <- ctx.list[[2]]$IntegratedAnno
+st.list[["ST1"]]$Batch <- ctx.list[[1]]$Batch
+st.list[["ST2"]]$Batch <- ctx.list[[2]]$Batch
+
+rm(seurat1, seurat2, seurat1_merge, seurat2_merge, ctx.df); gc()
+```
+
+SCTransform and integrate
+```{r integrate cortex}
+#transform each batch separately
+st.list <- lapply(st.list, SCTransform, assay = "Spatial", verbose = TRUE, method = "poisson", return.only.var.genes = F, variable.features.n = NULL, n_genes = NULL)
+saveRDS(st.list, file = "data/STlist_ctx_sct.Rds")
+
+#integration
+options(future.globals.maxSize = 6000 * 1024^2)
+
+st.features = SelectIntegrationFeatures(st.list, nfeatures = 5000, verbose = FALSE)
+st.list <- PrepSCTIntegration(object.list = st.list, anchor.features = st.features, verbose = FALSE)
+int.anchors <- FindIntegrationAnchors(object.list = st.list, normalization.method = "SCT", 
+    verbose = TRUE, anchor.features = st.features)
+
+batch1.genes <- rownames(st.list$ST1[["SCT"]])
+batch2.genes <- rownames(st.list$ST2[["SCT"]])
+all.genes <- intersect(batch1.genes, batch2.genes)
+
+seurat_ctx <- IntegrateData(anchorset = int.anchors, normalization.method = "SCT", 
+    verbose = TRUE, features.to.integrate = all.genes)
+saveRDS(seurat_ctx, file = "data/seurat_ctx_int_raw.Rds")
+```
+
+DimRed and clustering
+```{r dim red cortex}
+seurat_ctx <- readRDS(file = "data/seurat_ctx_int_raw.Rds")
+seurat_ctx <- SetIdent(seurat_ctx, value = "IntegratedAnno")
+
+all.genes <- rownames(seurat_ctx)
+all.genes.no.mito <- all.genes[grep("mt-", all.genes, ignore.case = T, invert = T)]
+
+seurat_ctx <- RunPCA(seurat_ctx, npcs = 50, verbose = TRUE, features = all.genes.no.mito, reduction.name = "pca") # mito genes are excluded from clustering
+PCAPlot(seurat_ctx, reduction = "pca", label = TRUE)
+PCAPlot(seurat_ctx, reduction = "pca", label = TRUE, group.by = "Batch")
+
+ElbowPlot(seurat_ctx, ndims = 50)
+DimHeatmap(seurat_ctx, dims = 15:35, cells = 700, balanced = TRUE)
+PCAPlot(seurat_ctx, dims = c(3,2), reduction = 'pca', label  = T)
+
+nDims <- 20
+seurat_ctx %<>% RunUMAP(reduction = "pca", dims = 1:nDims, verbose = TRUE, umap.method = 'umap-learn')
+UMAPPlot(seurat_ctx, label = TRUE, pt.size = 1.25, label.box = T)
+UMAPPlot(seurat_ctx, label = TRUE, group.by = "Batch", pt.size = 1.25, label.box = T)
+UMAPPlot(seurat_ctx, label = TRUE, group.by = "Condition", pt.size = 1.25, label.box = T)
+
+seurat_ctx %<>% FindNeighbors(reduction = "pca", dims = 1:nDims, verbose = FALSE)
+seurat_ctx %<>% FindClusters(resolution = 1, verbose = FALSE, algorithm = 1) ## res = 1
+UMAPPlot(seurat_ctx)
+SpatialPlot(seurat_ctx, crop = F)
+
+saveRDS(seurat_ctx, file = "data/seurat_ctx_int_dimred.Rds")
+```
+
+Annotating the clusters
+```{r annotate cortex}
+seurat_ctx <- readRDS(file = "data/seurat_ctx_int_dimred.Rds")
+ctx_markers <- seurat_ctx %>% FindAllMarkers(assay = "SCT", logfc.threshold = 0.58, verbose = T, only.pos = T)
+seurat_ctx <- RenameIdents(seurat_ctx,
+                                   '0' = "Isocortex L2/3/4",
+                                   '1' = "Isocortex L5",
+                                   '2' = "Ischemic area D7 periphery",
+                                   '3' = "Piriform area",
+                                   '4' = "Isocortex L6",
+                                   '5' = "Ischemic area D3 center",
+                                   '6' = "Isocortex L2/3/4",
+                                   '7' = "Ischemic area D1 center",
+                                   '8' = "Lateral isocortex L6",
+                                   '9' = "Ischemic area D1 periphery",
+                                   '10' = "Lateral isocortex L4/5",
+                                   '11' = "GLS",
+                                   '12' = "Isocortex L1",
+                                   '13' = "Isocortex L6",
+                                   '14' = "Piriform area",
+                                   '15' = "Ischemic area D1 periphery",
+                                   '16' = "Ischemic area D3 periphery",
+                                   '17' = "Ischemic area D7 center",
+                                   '18' = "Isocortex L2/3/4"
+)
+SpatialPlot(seurat_ctx, crop = F)
+
+seurat_ctx$CtxAnno <- factor(seurat_ctx@active.ident, levels = c("Isocortex L1",
+                                                                 "Isocortex L2/3/4",
+                                                                 "Isocortex L5",
+                                                                 "Isocortex L6",
+                                                                 "Lateral isocortex L4/5",
+                                                                 "Lateral isocortex L6",
+                                                                 "Piriform area",
+                                                                 "GLS",
+                                                                 "Ischemic area D1 center",
+                                                                 "Ischemic area D1 periphery",
+                                                                 "Ischemic area D3 center",
+                                                                 "Ischemic area D3 periphery",
+                                                                 "Ischemic area D7 center",
+                                                                 "Ischemic area D7 periphery"))
+seurat_ctx <- SetIdent(seurat_ctx, value = "CtxAnno")
+
+saveRDS(seurat_ctx, file = "data/seurat_ctx_int_dimred_anno.Rds")
+```
+
+=== Merging the annotation ===
+
+Loading the annotated spatial datasets, and merging the brain region annotation.
+```{r merge the cluster names}
+seurat_int <- readRDS(file = "data/brain_integrated_dimred_anno.Rds")
+seurat_ctx <- readRDS(file = "data/seurat_ctx_int_dimred_anno.Rds")
+
+ctx <- data.frame("Spots" = seurat_ctx %>% Cells,
+                  "Annotation" = seurat_ctx$CtxAnno %>% as.character())
+
+int <- data.frame("Spots" = seurat_int %>% Cells,
+                  "Annotation" = seurat_int$IntegratedAnno %>% as.character())
+
+int$DetailedAnno <- int$Annotation; int$DetailedAnno[match(ctx$Spots, int$Spots)] <- ctx$Annotation; int$DetailedAnno %>% as.factor %>% levels ## substituting cortex annotation in the integrated dataset for the anno from integrated cortex dataset
+identical(int$Spots, seurat_int %>% Cells) ## check the names fit
+seurat_int$DetailedIntAnno <- int$DetailedAnno %>% as.factor() ## add to the seurat int object
+
+## introduce region anno shortcuts
+seurat_int$DetailedIntAnno %>% levels
+seurat_int[["DetailedRegionAnnoShort"]] <- case_when(
+  seurat_int$DetailedIntAnno == "Amygdalar area" ~ "AMY",
+  seurat_int$DetailedIntAnno == "Caudoputamen" ~ "CP",
+  seurat_int$DetailedIntAnno == "Cortical subplate" ~ "CS",
+  seurat_int$DetailedIntAnno == "Fiber tracts" ~ "FT",
+  seurat_int$DetailedIntAnno == "GLS" ~ "GLS",
+  seurat_int$DetailedIntAnno == "Hippocampus" ~ "HIP",
+  seurat_int$DetailedIntAnno == "Hypothalamus" ~ "HY",
+  seurat_int$DetailedIntAnno == "Ischemic area D1 center" ~ "ISD1c",
+  seurat_int$DetailedIntAnno == "Ischemic area D1 periphery" ~ "ISD1p",
+  seurat_int$DetailedIntAnno == "Ischemic area D3 center" ~ "ISD3c",
+  seurat_int$DetailedIntAnno == "Ischemic area D3 periphery" ~ "ISD3p",
+  seurat_int$DetailedIntAnno == "Ischemic area D7 center" ~ "ISD7c",
+  seurat_int$DetailedIntAnno == "Ischemic area D7 periphery" ~ "ISD7p",
+  seurat_int$DetailedIntAnno == "Isocortex L1" ~ "CTX1-4",
+  seurat_int$DetailedIntAnno == "Isocortex L2/3/4" ~ "CTX1-4",
+  seurat_int$DetailedIntAnno == "Isocortex L5" ~ "CTX5",
+  seurat_int$DetailedIntAnno == "Isocortex L6" ~ "CTX6",
+  seurat_int$DetailedIntAnno == "Lateral isocortex L4/5" ~ "lCTX4-5",
+  seurat_int$DetailedIntAnno == "Lateral isocortex L6" ~ "lCTX6",
+  seurat_int$DetailedIntAnno == "Lateral ventricle" ~ "LV",
+  seurat_int$DetailedIntAnno == "Pallidum" ~ "PAL",
+  seurat_int$DetailedIntAnno == "Piriform area" ~ "PIR",
+  seurat_int$DetailedIntAnno == "Thalamus" ~ "TH"
+) %>% factor(levels = c("AMY", 'CP', 'CS', 'CTX1-4', 'CTX5', 'CTX6', 'FT', 'GLS', 'HIP', 'HY', 'ISD1c', 'ISD1p', 'ISD3c', 'ISD3p', 'ISD7c', 'ISD7p', 'lCTX4-5', 'lCTX6', 'LV', 'PAL', 'PIR', 'TH'))
+
+# add a simplified brain region names
+seurat_int@meta.data %<>% mutate("BrainAreas" = factor(case_when(
+  seurat_int$DetailedRegionAnnoShort == "AMY" ~ "Telencephalon", 
+  seurat_int$DetailedRegionAnnoShort == "CP" ~ "Telencephalon", 
+  seurat_int$DetailedRegionAnnoShort == "CS" ~ "Telencephalon", 
+  seurat_int$DetailedRegionAnnoShort == "CTX1-4" ~ "Cortex", 
+  seurat_int$DetailedRegionAnnoShort == "CTX5" ~ "Cortex", 
+  seurat_int$DetailedRegionAnnoShort == "CTX6" ~ "Cortex", 
+  seurat_int$DetailedRegionAnnoShort == "FT" ~ "Telencephalon", 
+  seurat_int$DetailedRegionAnnoShort == "GLS" ~ "Cortex", 
+  seurat_int$DetailedRegionAnnoShort == "HIP" ~ "Telencephalon", 
+  seurat_int$DetailedRegionAnnoShort == "HY" ~ "Diencephalon", 
+  seurat_int$DetailedRegionAnnoShort == "ISD1c" ~ "Lesion", 
+  seurat_int$DetailedRegionAnnoShort == "ISD1p" ~ "Lesion", 
+  seurat_int$DetailedRegionAnnoShort == "ISD3c" ~ "Lesion", 
+  seurat_int$DetailedRegionAnnoShort == "ISD3p" ~ "Lesion", 
+  seurat_int$DetailedRegionAnnoShort == "ISD7c" ~ "Lesion", 
+  seurat_int$DetailedRegionAnnoShort == "ISD7p" ~ "Lesion", 
+  seurat_int$DetailedRegionAnnoShort == "lCTX4-5" ~ "Telencephalon", 
+  seurat_int$DetailedRegionAnnoShort == "lCTX6" ~ "Telencephalon",
+  seurat_int$DetailedRegionAnnoShort == "LV" ~ "Telencephalon",
+  seurat_int$DetailedRegionAnnoShort == "PAL" ~ "Telencephalon",
+  seurat_int$DetailedRegionAnnoShort == "PIR" ~ "Telencephalon",
+  seurat_int$DetailedRegionAnnoShort == "TH" ~ "Diencephalon",
+)))
+
+## colorful clusters
+UMAPPlot(seurat_int, group.by = "DetailedIntAnno", cols = col.list$detailed_cols)
+SpatialPlot(seurat_int, group.by = "DetailedIntAnno", crop = F, label = F, image.alpha = 0.4, stroke = 0.05, cols = col.list$detailed_cols, images = c('sham', 'D1', 'D3', 'D7', 'D7b'), pt.size.factor = 1.35) & NoLegend()
+
+## grey-red cluster colors
+UMAPPlot(seurat_int, group.by = "DetailedIntAnno", cols = col.list$cols_mono)
+SpatialPlot(seurat_int, group.by = "DetailedIntAnno", crop = F, label = F, image.alpha = 0.4, stroke = 0.05, cols = col.list$cols_mono, images = c('sham', 'D1', 'D3', 'D7', 'D7b'), pt.size.factor = 1.35) & NoLegend()
+
+## short-anno colored
+UMAPPlot(seurat_int, group.by = "DetailedRegionAnnoShort", cols = col.list$cols_mono_short)
+SpatialPlot(seurat_int, group.by = "DetailedRegionAnnoShort", crop = F, label = F, image.alpha = 0.4, stroke = 0.05, cols = col.list$cols_mono_short, images = c('sham', 'D1', 'D3', 'D7', 'D7b'), pt.size.factor = 1.35) & NoLegend()
+
+
+saveRDS(seurat_int, file = "data/brain_integrated_dimred_anno.Rds")
+```
+
+=== Removing the D7b section. === 
+
+Although all the sections were of good quality and representative, we decided to remove the D7b section to maintain consistency in the section location (D7b bregma +0.5mm vs others -1.3mm). It was included for the integration to allow for anchoring of lesion clusters.
+
+```{r Removing the D7b section}
+seurat_int <- readRDS(file = "data/brain_integrated_dimred_anno.Rds")
+
+seurat_int$Condition %<>% as.factor; seurat_int %<>% SetIdent(value = "Condition")
+seurat_int %<>% subset(idents = "D7b", invert = T) ## remove spots from D7b
+seurat_int$Condition %>% table 
+
+seurat_int@images$D7b <- NULL ## remove the D7b image
+seurat_int %>% SpatialPlot(group.by = "DetailedRegionAnnoShort", crop = F, image.alpha = 0.4, cols = col.list$cols_mono_short) & NoLegend()
+
+
+saveRDS(seurat_int, file = "data/seurat_spatial_integrated_ready.Rds")
+```
+
+=== The dataset is processed and ready for further analysis ===
+```{r sessionInfo}
+sessionInfo()
+```
+

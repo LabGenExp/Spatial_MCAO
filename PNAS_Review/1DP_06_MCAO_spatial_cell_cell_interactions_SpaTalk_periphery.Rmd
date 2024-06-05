@@ -1,0 +1,477 @@
+---
+title: "1DP_05_MCAO_spatial_cell_cell_interactions_SpaTalk"
+author: "Matouš Laitl & Daniel Zucha" 
+date: "2024-03-16"
+output: html_document
+---
+
+Hello, 
+
+In this markdown we aim to compute the cell-cell interactions (CCI) in our spatial data using the [SpaTalk algorithm](https://github.com/ZJUFanLab/SpaTalk). For this, we use the in-house generated spatial data, with cell type presence estimated using reference-based deconvolution RCTD (library(spacexr) by Cable et al).
+
+Given that glial cell actively persist in the lesion periphery, here we investigate CCIs that prompt them to actively form penumbra and glial scar.
+
+Input files:
+- "data/seurat_spatial_integrated_ready_rctdZeng2023.rds" # spatial seurat with deconvolution results
+- "data/RCTDlist_scRefZeng2023_fullmode.Rds" # deconvolution results directly from RCTD
+- "data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds" # processed seurat object of the reference single-cell Zeng et al 2023 object
+
+
+loading libraries
+```{r libraries}
+# day-to-day libraries
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(openxlsx)
+library(magrittr)
+library(stringr)
+library(patchwork)
+
+# deconvolution and CCI
+library(spacexr)
+library(SpaTalk)
+
+# visual
+library(circlize)
+library(grid)
+library(ggrepel)
+
+# set for SpaTalk to operate properly
+options(Seurat.object.assay.version = 'v3')
+
+# sourcing custom functions and color palettes
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+# ws
+if(!dir.exists("ws")){dir.create("ws")
+  ws <- "ws"}else{ws <- "ws"}
+
+# lists
+plot.list <- list()
+result.list <- list()
+```
+
+```{r load data}
+# in-house spatial with deconvo results
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready_rctdZeng2023.rds")
+
+# ref Zeng 2023 single-cell seurat
+seurat <- readRDS("data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds")
+seurat %<>% SetIdent(value = "CellTypeClass")
+
+# deconvo results
+# myRCTD.list <- readRDS(file = "data/RCTDlist_scRefZeng2023_fullmode.Rds")
+
+# Periphery-specific misc 
+sections <- c("1DPI", "3DPI", "7DPI")
+periphery_regions <- c("ISD1p", "ISD3p", "ISD7p")
+```
+
+preprocessing ST seurat to Spatalk object
+```{r ST to Spatalk object}
+prep.list <- sections %>% lapply(\(x){
+  
+  # define the lesion peripheries for each section
+  if(x == "1DPI"){
+    section_barcodes <- spatial.seurat@meta.data %>% 
+      filter(Condition %in% x & DetailedRegionAnnoShort %in% "ISD1p" & nFeature_Spatial > 100) %>% 
+      pull(Barcodes)
+  } else if(x == "3DPI"){
+    section_barcodes <- spatial.seurat@meta.data %>% 
+      filter(Condition %in% x & DetailedRegionAnnoShort %in% "ISD3p" & nFeature_Spatial > 100) %>% 
+      pull(Barcodes)
+  } else if(x == "7DPI"){
+    section_barcodes <- spatial.seurat@meta.data %>% 
+      filter(Condition %in% x & DetailedRegionAnnoShort %in% "ISD7p" & nFeature_Spatial > 100) %>% 
+      pull(Barcodes)
+  } else {
+    cat(crayon::red("Unknown section. Check your section names."))
+    break
+  }
+  
+  # cell type names
+  celltype_names <- spatial.seurat@meta.data %>% 
+    colnames %>% 
+    stringr::str_subset(pattern = "^RCTD_")
+  
+  temp_list <- list()
+  
+  # section's count matrix 
+  temp_list[["counts"]] <- spatial.seurat %>% 
+    Seurat::GetAssayData(assay = "Spatial", layer = "counts") %>% 
+    .[, section_barcodes]
+  colnames(temp_list[["counts"]]) <- colnames(temp_list[["counts"]]) %>% 
+    stringr::str_replace(pattern = "-", replacement = "_")
+  
+  # sections coordinate metadata
+  temp_list[["md"]] <- spatial.seurat@images[[x]]@coordinates[,c("imagecol", "imagerow")] %>% 
+    rename(
+      x = imagecol, 
+      y = imagerow
+    ) %>% 
+    rownames_to_column("spot") %>% 
+    filter(spot %in% section_barcodes) %>% 
+    mutate(spot = stringr::str_replace(spot, pattern = "-", replacement = "_")) %>%
+    slice(match(temp_list[["counts"]] %>% colnames, spot))
+  
+  ## order md if needed
+  temp_list[["md"]] <- temp_list[["md"]][, ]
+  
+  # deconvolution results
+  temp_list[["result"]] <- spatial.seurat@meta.data %>% 
+    select(all_of(starts_with("RCTD_"))) %>% 
+    rownames_to_column(var = "Barcodes") %>% 
+    filter(Barcodes %in% section_barcodes) %>% 
+    mutate(Barcodes = stringr::str_replace(Barcodes, pattern = "-", replacement = "_")) %>%
+    slice(match(temp_list[["counts"]] %>% colnames, Barcodes)) %>% 
+    column_to_rownames("Barcodes") %>% 
+    rename_with(~ gsub("RCTD_", "", .x)) %>% 
+    as.matrix
+  
+  return(temp_list)
+})
+names(prep.list) <- sections
+```
+
+Creating SpaTalk object
+```{r create spatalk object}
+spatalk.list <- prep.list %>% lapply(\(x){
+  object <- createSpaTalk(
+    st_data = x[["counts"]],
+    st_meta = x[["md"]],
+    species = "Mouse",
+    if_st_is_sc = FALSE,
+    spot_max_cell = 20
+  )
+  return(object)
+})
+```
+
+Preprocessing single-cell data for SpaTalk
+```{r preprocessing SC for SpaTalk}
+result.list[["sc_data"]] <- seurat %>% GetAssayData(assay = "RNA", layer = "counts")
+result.list[["sc_celltype"]] <- seurat@meta.data$CellTypeClass %>% as.character()
+
+rm(seurat)
+gc()
+```
+
+Save the files and move to background job to run `dec_celltype()`, `find_lr_path()`, `dec_cci_all()` (computationally expensive steps both in time and memory).
+```{r moving to a background job}
+save(spatalk.list, result.list, prep.list, file = file.path("data", "1DP_05_MCAO_dec_celltype_background_periphery.Rdata"))
+# Move to the background job by running "OF_05_MCAO_SpaTalk_dec_celltype_background.R"
+# The output are named as "SpaTalk_RefZeng2023_MCAO_spatial_full_xxxx.Rdata", for each section separately to make the object read and load more efficient.
+```
+
+When finished, load periphery Spatalk objects
+```{r load periphery SpaTalk objects}
+spatalk.list <- list()
+for(section in sections){
+  load(file = file.path("data", paste0("SpaTalk_RefZeng2023_MCAO_spatial_full_", section, "_periphery.Rdata")))
+  spatalk.list[[section]] <- full_spatalk
+}
+
+rm(section, full_spatalk)
+```
+
+CCI of receiving glia
+```{r glia receivers}
+glia_lr_receivers <- sections %>% lapply(\(x){
+  temp <- spatalk.list[[x]]@lrpair %>% 
+    mutate(Condition = rep(x, times = nrow(.)),
+           LRpair = paste0(ligand, "-", receptor), 
+           CellTypePair = paste0(celltype_sender, "-", celltype_receiver)) %>% 
+    filter(celltype_receiver %in% c("OLs", "Astrocytes", "Microglia"))
+}) %>% 
+  bind_rows() %>% 
+  arrange(desc(lr_co_exp_num))
+
+glia_lr_senders_summary <- glia_lr_receivers %>% 
+  group_by(LRpair, celltype_sender) %>% 
+  summarise(
+    total_lr_co_exp_num = sum(lr_co_exp_num),
+    .groups = "drop"
+  ) %>% 
+  arrange(desc(total_lr_co_exp_num))
+
+top_glial_lr <- glia_lr_senders_summary %>% 
+  group_by(LRpair) %>% 
+  summarise(total_interactions = sum(total_lr_co_exp_num), .groups = "drop") %>% 
+  arrange(desc(total_interactions)) %>% 
+  top_n(n = 10, wt = total_interactions) %>% 
+  pull(LRpair)
+
+# senders to glia
+top_glia_lr_senders_summary <- glia_lr_senders_summary %>% 
+  filter(LRpair %in% top_glial_lr) %>% 
+  mutate(LRpair = factor(LRpair, levels = top_glial_lr))
+
+result.list[["top_glia_lr_senders_summary"]] <- top_glia_lr_senders_summary
+
+# glia receiving 
+glia_lr_receivers_summary <- glia_lr_receivers %>% 
+  group_by(LRpair, celltype_receiver) %>% 
+  summarise(
+    total_lr_co_exp_num = sum(lr_co_exp_num),
+    .groups = "drop"
+  ) %>% 
+  arrange(desc(total_lr_co_exp_num))
+
+top_glia_lr_receivers_summary <- glia_lr_receivers_summary %>% 
+  filter(LRpair %in% top_glial_lr) %>% 
+  mutate(LRpair = factor(LRpair, levels = top_glial_lr))
+
+result.list[["top_glia_lr_receivers_summary"]] <- top_glia_lr_receivers_summary
+
+# CCI by Condition
+glia_lr_condition_summary <- glia_lr_receivers %>% 
+  group_by(LRpair, Condition) %>% 
+  summarise(
+    total_lr_co_exp_num = sum(lr_co_exp_num),
+    .groups = "drop"
+  ) %>% 
+  arrange(desc(total_lr_co_exp_num))
+
+top_glia_lr_condition_summary <- glia_lr_condition_summary %>% 
+  filter(LRpair %in% top_glial_lr) %>% 
+  mutate(LRpair = factor(LRpair, levels = top_glial_lr))
+
+result.list[["top_glia_lr_condition_summary"]] <- top_glia_lr_condition_summary
+```
+
+Let's inspect the most numerous interaction where glia are on the receiving end - Apoe-Trem2.
+```{r SpatialPlot for Apoe-Trem2 coexpression}
+# compute expression value of Apoe-Trem2 pair
+mtx <- spatial.seurat %>% 
+  GetAssayData(assay = "Spatial", layer = "data") %>% 
+  .[c("Apoe", "Trem2"), ] %>% 
+  t %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Barcodes") %>% 
+  dplyr::rename(
+    exp_Apoe = Apoe, 
+    exp_Trem2 = Trem2) %>% 
+  rowwise() %>% 
+  mutate(Apoe_Trem2_lr_exp = case_when(
+    exp_Apoe == 0 | exp_Trem2 == 0 ~ 0, 
+    TRUE ~ mean(c(exp_Apoe, exp_Trem2))
+  )) %>% 
+  ungroup()
+
+head(mtx)
+
+# add to spatial.seurat data
+spatial.seurat@meta.data %<>% right_join(y = mtx, by = "Barcodes")
+spatial.seurat@meta.data %<>% 
+  mutate(barcode = Barcodes) %>% 
+  column_to_rownames(var = "Barcodes")
+spatial.seurat@meta.data$Apoe_Trem2_lr_exp %>% summary
+
+
+spatial.seurat %>% SpatialPlot(
+  features = "Apoe_Trem2_lr_exp", 
+  images = sections, 
+  image.alpha = 0.2, 
+  stroke = 0, 
+  crop = T, 
+  ncol = 3, 
+  pt.size.factor = 1.9, 
+  combine = TRUE
+  ) & 
+  theme_mk &
+  remove_grid &
+  NoAxes() & 
+  NoLegend() &
+  scale_fill_gradientn(colors = col.list$gradient_grey_to_red, limits = c(0, 5.1)) & 
+  scale_alpha_continuous(range = c(0.75, 1))
+```
+Apoe-Trem2 is the most numerous change! How wide spread is Apoe-Trem2 signaling under control conditions? 
+```{r apoe trem2 in control conditions}
+spatalk.list <- list()
+load(file = file.path("data", "SpaTalk_RefZeng2023_MCAO_spatial_full_Ctrl.Rdata")) ## full_spatalk object of control cortex is added
+spatalk.list[["Ctrl"]] <- full_spatalk
+
+load(file = file.path("data", "SpaTalk_RefZeng2023_MCAO_spatial_full_7DPI.Rdata"))
+spatalk.list[["7DPI"]] <- full_spatalk
+
+SpaTalk::plot_lrpair(spatalk.list[["Ctrl"]], 
+                     celltype_sender = "OLs", 
+                     celltype_receiver = "Microglia", 
+                     ligand = "Apoe", 
+                     receptor = "Trem2")
+
+
+SpaTalk::plot_lrpair(spatalk.list[["7DPI"]], 
+                     celltype_sender = "OLs", 
+                     celltype_receiver = "Microglia", 
+                     ligand = "Apoe", 
+                     receptor = "Trem2")
+```
+
+How many genes are downstream affected?
+```{r Downstream Apoe-Trem2 genes}
+# Generate the generic SpaTalk downstream plot
+plot <- SpaTalk::plot_lr_path(
+    object = spatalk.list[["7DPI"]],
+    celltype_sender = "OLs", 
+    celltype_receiver = "Microglia", 
+    ligand = "Apoe", 
+    receptor = "Trem2", 
+    size = 2, 
+    color = col.list$zeng.cols
+    ) 
+
+# Extract data from the plot
+plot_data <- ggplot_build(plot)$data[[2]] %>% 
+  mutate(Celltype = c("OLs", rep("Microglia", length.out = nrow(.)-1)))
+segment_data <- ggplot_build(plot)$data[[1]]
+label_data <- ggplot_build(plot)$data[[3]] %>% 
+  mutate(Celltype = c("OLs", rep("Microglia", length.out = nrow(.)-1)))
+
+# save the data for spatalk plot
+result.list[["downstream_apoe_trem2_genes"]] <- list(
+  "plot_data" = plot_data, 
+  "segment_data" = segment_data, 
+  "label_data" = label_data) 
+```
+
+What processes are the downstream genes involved in?
+```{r Apoe-Trem2 downstream GO}
+# exemplary downstream targets
+result.list[["Apoe_Trem2_downstream_targets"]] <- sections %>% lapply(\(x){
+  # get the LR pairs
+  plot <- SpaTalk::plot_lr_path(
+    object = spatalk.list[[x]],
+    celltype_sender = "OLs", 
+    celltype_receiver = "Microglia", 
+    ligand = "Apoe", 
+    receptor = "Trem2"
+    )
+  
+  # extract the downstream targets
+  downstream_targets <- plot[["plot_env"]][["plot_node_new"]][["gene"]] %>% unique
+  return(downstream_targets)
+}) %>% 
+  unlist %>% 
+  unique %>% 
+  sort
+
+# enrichment for processes of downstream targets
+library(clusterProfiler)
+library(org.Mm.eg.db)
+
+universe <- sections %>% lapply(\(x){
+  temp <- spatalk.list[[x]]@data$newdata %>% rownames
+  return(temp)
+}) %>% 
+  unlist %>% 
+  unique
+
+result.list[["GO_apoe_trem_downstream_targets"]] <- clusterProfiler::enrichGO(
+  gene = result.list[["Apoe_Trem2_downstream_targets"]], 
+  OrgDb = org.Mm.eg.db, 
+  universe = universe,
+  ont = "ALL", 
+  keyType = "SYMBOL", 
+  pvalueCutoff = 0.01, 
+  pAdjustMethod = "fdr", 
+  minGSSize = 10, 
+  pool = TRUE
+  ) %>% 
+  simplify()
+
+
+downstream_go <- result.list[["GO_apoe_trem_downstream_targets"]]@result %>% 
+  tibble %>% 
+  arrange(qvalue)
+
+go_processes <- c(
+    "proteasome complex", 
+    "neuron apoptotic process", 
+    "positive regulation of ERK1 and ERK2 cascade", 
+    "gliogenesis", 
+    "glucose metabolic process", 
+    "chemotaxis", 
+    "positive regulation of cytokine production", 
+    "tissue remodeling"
+  )
+
+# select top processes and turn it into a named list
+downstream_go_list <- downstream_go %>% 
+  dplyr::filter(Description %in% go_processes) %>% 
+  dplyr::select(Description, geneID) %>% 
+  dplyr::mutate(
+    Description = Description %>% stringr::str_to_sentence() %>% paste0("GO_", .), 
+    geneID = geneID %>% str_split(pattern = "/")
+  ) %>% 
+  mutate(geneID = map(geneID, as.character)) %>% 
+  { set_names(.$geneID, .$Description)}
+
+# add the processes into the spatial object
+spatial.seurat %<>% AddModuleScore(
+  features = downstream_go_list, 
+  name = names(downstream_go_list))
+
+spatial.seurat@meta.data %>% glimpse
+
+# prepare the GO enrichment data
+result.list[["GO_apoe_trem_downstream_df"]] <- downstream_go %>% 
+  dplyr::filter(Description %in% go_processes) %>% 
+  dplyr::mutate(Description = Description %>% 
+                  stringr::str_to_sentence() %>% 
+                  stringr::str_replace_all(pattern = "erk", replacement = "ERK"),
+                Pvalue = -log10(p.adjust)) %>%
+  dplyr::arrange(Pvalue) %>% 
+  dplyr::mutate(Description = factor(Description, levels = Description))
+```
+
+Subset the spatial seurat for periphery regions
+```{r subset spatial seurat for periphery}
+spatial.seurat %<>% SetIdent(value = "DetailedRegionAnnoShort")
+periphery_spatial <- spatial.seurat %>% 
+  subset(subset = (DetailedRegionAnnoShort %in% periphery_regions & Condition %in% sections))
+
+periphery_spatial %>% SpatialPlot(crop = T) & NoLegend()
+```
+
+Apoe-Trem-related expression in the lesion periphery
+```{r Apoe-Trem related expression in lesion periphery}
+library(ComplexHeatmap)
+library(viridis)
+
+# min-max normalization function producing 0-to-1 range. Summarize the values per lesion periphery area.
+heatmap_data <- spatial.seurat@meta.data %>% 
+  filter((DetailedRegionAnnoShort %in% periphery_regions & Condition %in% sections)) %>% 
+  mutate(across(starts_with("GO_"), 
+                min_max_normalize)) %>% 
+  group_by(Condition) %>% 
+  summarise(
+    `Proteasome Complex` = mean(`GO_Proteasome complex1`), 
+    `Neuron Apoptotic Process` = mean(`GO_Neuron apoptotic process2`), 
+    `ERK1 and ERK2 cascade` = mean(`GO_Positive regulation of erk1 and erk2 cascade3`), 
+    Gliogenesis = mean(GO_Gliogenesis4), 
+    `Glucose Metabolic Process` = mean(`GO_Glucose metabolic process5`),
+    Chemotaxis = mean(GO_Chemotaxis6), 
+    `Cytokine Production` = mean(`GO_Positive regulation of cytokine production7`), 
+    `Tissue Remodeling` = mean(`GO_Tissue remodeling8`),
+    Neurons = mean(RCTD_Neurons), 
+    Astrocytes = mean(RCTD_Astrocytes), 
+    Microglia = mean(RCTD_Microglia), 
+    OLs = mean(RCTD_OLs), 
+    .groups = "drop"
+    ) %>% 
+  column_to_rownames(var = "Condition") %>%
+  as.matrix()
+
+result.list[["Heatmap_data_apoe_trem"]] <- heatmap_data
+```
+
+save output files: result.list and spatial seurat with added Apoe-Trem and GO results.
+```{r save spatial seurat}
+saveRDS(spatial.seurat, file = file.path("data", "seurat_spatial_1DP_06.Rds"))
+save(result.list, file = file.path("data", "ResultList_1DP_06.Rdata"))
+```

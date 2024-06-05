@@ -1,0 +1,1070 @@
+---
+title: "MCAO_bulk"
+author: "Daniel Zucha"
+date: "2023-06-04"
+output: html_document
+---
+
+Markdown for the analysis of bulk RNA-Seq data, matching the experimental design of the spatial transcriptomics experiment.
+
+The bulk data are to be kept in a separate folder named 'bulk', with two subfolders named 'data' and 'results'. 
+
+Essential input files:
+  - .xls files: "samples_MCAO.csv", "ORAlist_onMarkers_UP_IschemicRegions.xlsx"(optional, for comparison with spatial results)
+  - .count files: downloaded from GEO depository
+
+=== Essential chunks. Always load. === 
+
+```{r libraries}
+# day-to-day libraries
+library(tibble)
+library(openxlsx)
+library(tidyverse)
+library(magrittr)
+library(tidyr)
+library(stringr)
+library(purrr)
+
+# visualisation
+library(ggplot2)
+library(RColorBrewer)
+library(pheatmap)
+library(gridExtra)
+library(patchwork)
+
+# bulk data related
+library(DESeq2)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+
+# sourcing the supporting functions
+source("code/supporting_functions_MCAO.R")
+
+tidyverse_priority()
+```
+
+Miscellaneous. Sourcing functions, Custom functions, color list, lists for results and figures...
+```{r misc}
+## lists for the results
+bulk.results <- list()
+bulk.plots <- list()
+```
+
+```{r file folder loc}
+if(!dir.exists("ws/bulk")){dir.create("ws/bulk")}
+wsbulk <- "ws/bulk"
+```
+
+=== mRNA bulk MCAO ===
+
+Read bulk data
+```{r read in the bulk data}
+{
+  samples<-read.table("data/bulk/samples_MCAO.csv", header=T, sep=";")
+  samples$countf <- paste(samples$SampleName,"count",sep="_union_name.")
+  samplesDESeq <- data.frame("SampleName" = samples$LibraryName %>% as.factor(),
+                             "countf" = samples$countf,
+                             "time" = samples$Timepoint %>% factor(levels = c("Ctrl","3h","12h","24h","3d","7d")),
+                             "replicate" = samples$Replicate %>% as.factor(),
+                             "batch" = samples$Batch %>% as.factor(),
+                             "condition" = samples$Condition %>% factor(levels = c("FCI_Control", "FCI_Sham", "FCI_MCAO")), 
+                             "injury" = dplyr::case_when(
+                               stringr::str_detect(samples$Condition, "_Control") ~ "uninjured",
+                               stringr::str_detect(samples$Condition, "_Sham") ~ "uninjured",
+                               stringr::str_detect(samples$Condition, "_MCAO") ~ "injured") %>% factor(levels = c("uninjured", "injured"))
+                             )
+  samplesDESeq %<>% mutate(group = factor(ifelse(injury == "uninjured", "NoMCAO", as.character(time)), levels = c("NoMCAO", "3h", "12h", "24h", "3d", "7d"))) # create a grouping column used for differential testing
+  
+  # keep samples from batch 1 and timepoints matching the ST and single-cell data
+  samplesDESeq %<>% dplyr::filter(batch %in% "1", time %in% c("Ctrl", "24h", "3d", "7d"))
+  samplesDESeq %<>% droplevels()
+  rownames(samplesDESeq) <- samplesDESeq$SampleName
+}
+```
+
+Specify the DESeq2 design. Here, we simplify the design to a single variable named 'group', which will be used to contrast the baseline non-MCAO animals (control + sham) against the timepoint-specified MCAO samples.
+```{r DESeq design}
+{
+  # specify the DESeq design
+  cds <- DESeqDataSetFromHTSeqCount(samplesDESeq, 
+                                    directory = "data/bulk/count", 
+                                    design = ~ group) # test for the grouping variable
+  
+  row.names(cds) %<>% gsub("\\..*","", .) # clearing the ensemble gene names of the appendid '.d'
+  cds <- cds[-grep("ERCC", row.names(cds)),] # removing ercc spike in
+  cds <- cds[(cds %>% counts %>% rowSums) >= 10, ] # removing genes with less than 10 reads across
+}
+```
+
+Normalization (vst) and PCA
+```{r vst and pca}
+rld <- varianceStabilizingTransformation(cds) ## DESeqTransform object
+vsn::meanSdPlot(assay(rld)) # check the variance of genes
+
+# PCA
+data<-plotPCA(rld, intgroup = c("time","replicate","batch","condition", "group"), returnData=TRUE, ntop = 10000)
+percentVar <- round(100 * attr(data, "percentVar"))
+
+p1<-qplot(PC1, PC2, color=batch, shape=replicate, data=data) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  geom_point(size=4); p1
+
+p1<-qplot(PC1, PC2, color=batch, shape=condition, data=data) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  geom_point(size=4); p1
+
+p1<-qplot(PC1, PC2, color=time, shape=condition, data=data) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  geom_point(size=4); p1
+
+p1<-qplot(PC1, PC2, color=time, shape=group.1, data=data) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  geom_point(size=4); p1
+```
+In the PCA plot we observe that the primary separator (PC1) is the MCAO injury, specifically even the individual timepoints. The control and sham-controls clustered together well. The most different samples were of 3DPI, in line with literature.
+
+# DESeq2 - differential gene expression
+
+DESeq2
+```{r DESeq2 results}
+dds <- DESeq(cds, test = "Wald") # reduced model is missing the interaction term. Then, for DEGs are considered only genes that are differentially expressed at some specific timepoint, and not those that would be increased across the entire 'MCAO condition'.
+
+# Individual comparisons
+resultsNames(dds)
+dds$group %>% levels
+
+timepoint <- levels(dds$group)[-1]
+deseq.list <- lapply(timepoint, function(x){
+  res <- results(dds, contrast = c("group", x, "NoMCAO"))
+  res$symbol <- mapIds(org.Mm.eg.db,keys=row.names(dds),column="SYMBOL",keytype="ENSEMBL",multiVals="first")
+  res$entrezid <- res@rownames
+  return(res)
+}); names(deseq.list) <- timepoint
+
+# save the DESeq2 results
+write.xlsx(deseq.list, file = file.path(wsbulk, "DESeq2_bulkMCAO_results.xlsx"), rowNames = T)
+save(cds, dds, rld, samplesDESeq, file = file.path("data", "bulk", "MCAO_bulk_gexp_objects.Rdata"))
+```
+
+load in the saved bulk gene expression objects
+```{r load bulk data objects}
+load(file = file.path("data", "bulk", "MCAO_bulk_gexp_objects.Rdata"))
+```
+
+Deseq-identified DEGs
+```{r DEGs by DESeq}
+deseq.list <- read_all_sheets(file = file.path(wsbulk, "DESeq2_bulkMCAO_results.xlsx"))
+timepoint <- names(deseq.list)
+
+{
+  # define the marker threshold values
+  padj_threshold <- 0.01 
+  logFC_threshold <- 0.58 # translating to 50 % increase
+}
+
+## DEseq markers
+deseq.markers <- lapply(timepoint, function(x){
+  deseq.temp <- deseq.list[[x]]
+  deseq.temp %<>% filter((log2FoldChange %>% abs) > logFC_threshold & padj < padj_threshold) # filter for marker genes based on lfc and padj
+  deseq.temp %<>% arrange(padj) # sort based on p values
+  deseq.temp %<>% .[!is.na(deseq.temp$symbol),] # filter out genes without a symbol
+  if((deseq.temp[['log2FoldChange']] %>% is.na %>% sum) == 0){
+    print(paste0("All good! No NAs in lfc column for ", x, " timepoint."))
+  }else{
+    print('Error! NAs found in lfc column. Check your input data.')
+  }
+  if((deseq.temp[['padj']] %>% is.na %>% sum) == 0){
+    print(paste0("All good: No NAs in padj column for ", x, " timepoint."))
+  }else{
+    print('Error! NAs found in padj column. Check your data.')
+  }
+  return(deseq.temp)
+  }); names(deseq.markers) <- timepoint ## marker gene list from DESeq results
+deseq.markers_df <- deseq.markers %>% bind_rows(.id = "timepoint")
+readr::write_tsv(deseq.markers_df, file = file.path(wsbulk, "DESeq2_bulkMCAO_DEGs_Timepoint_Markers.tsv"))
+
+{
+  ## select up and down-regulated markers
+  deseq.markers.up <- lapply(timepoint, function(x){
+    deseq.markers[[x]] %>% filter(log2FoldChange > logFC_threshold) %>% arrange()
+    }); names(deseq.markers.up) <- timepoint
+  deseq.markers.down <- lapply(timepoint, function(x){
+    deseq.markers[[x]] %>% filter(log2FoldChange < -logFC_threshold)
+    }); names(deseq.markers.down) <- timepoint
+}
+```
+
+# Sources of variation within the dataset
+```{r sources of variation}
+library(variancePartition)
+
+# Requirements:
+# normalized matrix of counts (rows = genes, cols = samples)
+norm_mat <- counts(dds, normalized = TRUE)
+
+# metadata info
+temp_df <- colData(dds) %>% 
+  as.data.frame() %>% 
+  mutate(SampleGroup = rownames(.) %>% 
+           stringr::str_sub(end = -3) %>% factor)
+
+# Calculate CCA to assess correlation between the pairs of variables
+form <- ~ time + replicate + condition + injury + group + SampleGroup + sizeFactor + replaceable
+C <- canCorPairs(form, temp_df)
+plotCorrMatrix(C)
+
+# Run variancePartition analysis
+## define formula
+formula <- ~ (1 | injury) + (1 | time) # when categorical, denote as random variable with (1 | X ), when quantitative write as X
+
+## Fit model
+results <- fitVarPartModel(norm_mat, formula, temp_df)
+
+## extract results
+varPart <- fitExtractVarPartModel(norm_mat, formula, temp_df)
+vp <- sortCols(varPart)
+
+varPart %>% head
+```
+
+```{r Visualize the sources of variation}
+# Bar plot of variance fractions for selected genes
+plotPercentBars(vp[1:10, ])
+
+# VlnPlot of contribution of each variable to total variance
+bulk.plots[["VlnPlot_VarianceExplained_byExperimentalSetup"]] <- plotVarPart(vp) + theme_mk +theme(legend.position = "none") + ylab("Gene-wise variance explained (%)") # all bulk genes included
+
+# ST markers
+st_markers_ens <- read_all_sheets(file = file.path("results", "StudyOverview", "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx")) %>% # read in the ST markers
+  .[c("ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p")] %>% # markers of ischemic regions
+  lapply(FUN = function(x){x %>% filter(p_val_adj < 0.01 & avg_log2FC > 0.58) %>% pull(gene)}) %>% # signif & upregulated genes
+  unlist %>% # from list to char vector
+  unique() %>% 
+  mapIds(org.Mm.eg.db, keys = ., column = "ENSEMBL", keytype = "SYMBOL", multiVals = "first") # map gene symbols to ensembl IDs
+
+# ST markers and their variance
+varPart_st <- varPart %>% sortCols() %>% .[rownames(.) %in% st_markers_ens, ]
+plotVarPart(varPart_st) + theme_mk
+
+# plot ExpDesign variance vs rank
+varPart_df <- varPart %>% as.data.frame() %>% mutate(ExpDesign = (injury + time)*100, 
+                                                     ExpDesignRank = rank(-ExpDesign, ties.method = "random"), 
+                                                     isSpatialMarker = rownames(.) %in% st_markers_ens, 
+                                                     GeneSymbol = rownames(.) %>% mapIds(org.Mm.eg.db, keys = ., column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first"))
+
+varPart_df %>% head(3)
+
+# Scatterplot - Gene-wise variance explaied by the experimental setup, color-coded by ST marker grouping.
+{
+  bulk.plots[["ScatterPlot_GeneVar_ExpDesign"]] <- ggplot(varPart_df, aes(x = ExpDesignRank, y = ExpDesign, color = isSpatialMarker, fill = isSpatialMarker)) +
+    geom_point(size = 1, alpha = 0.3) +
+    labs(title = "Variance related to the bulk experimental design and spatial markers",
+         x = "Gene Rank",
+         y = "Gene-wise variance explained by the experimental design (%)") +
+    scale_color_manual(values = c("grey", "red")) + 
+    theme_mk + theme(legend.position = "bottom") 
+    
+  # testing for skewdness of ST markers based on their Gene Rank
+  st_markers_ranks <- varPart_df %>% filter(isSpatialMarker == TRUE) %>% pull(ExpDesignRank)
+  bulk.results[["KStest_STtailenrichment"]] <- ks.test(x = st_markers_ranks, 1:nrow(varPart_df)) # Kolmogorov Smirnov test with H0: ST marker ranks are uniformly distributed.
+    
+  # add the KS test results to the ggplot
+  bulk.plots[["ScatterPlot_GeneVar_ExpDesign"]] <- bulk.plots[["ScatterPlot_GeneVar_ExpDesign"]] + 
+    annotate("text", x = 1000, y = 80, hjust = 0, vjust = 0,
+             label = paste0("KS Test D = ", bulk.results[["KStest_STtailenrichment"]]$statistic %>% round(3), ", p-value = ", bulk.results[["KStest_STtailenrichment"]]$p.value), 
+             color = "black", size = 3)
+  
+  
+  # add density plots to the sides for better readability
+  bulk.plots[["ScatterPlot_Density_GeneVar_ExpDesign"]] <- ggExtra::ggMarginal(
+    bulk.plots[["ScatterPlot_GeneVar_ExpDesign"]], 
+    type = "density", 
+    fill = "transparent", 
+    groupColour = TRUE, 
+    groupFill = TRUE)
+}
+
+{
+  # wrap the summarizing plots
+  bulk.plots[["WrapPlots_VarianceExplained"]] <- patchwork::wrap_plots(
+    bulk.plots[c("VlnPlot_VarianceExplained_byExperimentalSetup", 
+                 "ScatterPlot_Density_GeneVar_ExpDesign")], ncol = 2, nrow = 1, byrow = T, design = "AB") + 
+    plot_annotation(title = "Gene-wise variance in the bulk data", tag_levels = "A")
+  
+  # print for preview
+  print(bulk.plots[["WrapPlots_VarianceExplained"]])
+  
+  # save the wrap plot
+  # bulk.plots[["WrapPlots_VarianceExplained"]] %>% ggsave_tiff(ws_location = wsbulk, plotname = "WrapPlot_MCAO_bulk_VarianceExplained", height = 15, width = 30)
+}
+```
+
+```{r correlation matrix}
+vst_mat <- rld@assays@data@listData[[1]]
+vst_mat_scale <- vst_mat %>% scale()
+# vst_mat <- assay(rld); vst_mat2 <- vst_mat[rownames(vst_mat) %in% ens_markers, ]
+
+cor_mat <- cor(vst_mat, method = "pearson")
+cor_mat_scale <- cor(vst_mat_scale, method = "pearson")
+
+cor_mat %>% heatmap(Rowv = NA, Colv = NA)
+
+```
+
+# Visualizing genes and gene modules
+```{r Per-group gene expression plot}
+vst_counts <- counts(dds, normalized = TRUE) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "EnsemblID") %>% 
+  mutate(GeneSymbol = EnsemblID %>% mapIds(org.Mm.eg.db, 
+           keys = ., 
+           column = "SYMBOL", 
+           keytype = "ENSEMBL", 
+           multiVals = "first")) %>% 
+  select(GeneSymbol, everything(), -EnsemblID) %>% 
+  group_by(GeneSymbol) %>% 
+  summarise(across(everything(), sum), .groups = "drop") %>% 
+  filter(!isNA(GeneSymbol)) %>% 
+  column_to_rownames(var = "GeneSymbol") %>% 
+  t %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "SampleName") %>% 
+  right_join(samplesDESeq, by = "SampleName")
+
+vst_counts[1:5, 1:5]
+
+
+pergroup_gexp_plot <- function(exp_mat, feature, grouping_var){
+  # map the feature gene name to ensembl ID
+  feature_mapped <- feature %>% 
+    mapIds(org.Mm.eg.db, 
+           keys = ., 
+           column = "ENSEMBL", 
+           keytype = "SYMBOL", 
+           multiVals = "first")
+  
+  # mean_value_per_group <- exp_mat %>%
+  #   group_by(.data[[grouping_var]]) %>%
+  #   dplyr::summarise(Mean = mean(.data[[feature_mapped]], na.rm = TRUE))
+  
+  plot <- ggplot(exp_mat, aes(x = .data[[grouping_var]], y = .data[[feature_mapped]], color = .data[[grouping_var]])) +
+    geom_point(position = position_jitter(width = 0.2)) +
+    scale_color_manual(values = unname(col.list$Condition)) +  
+    ggtitle(label = feature) +
+    ylab("Normalized expression") +
+    theme_mk
+
+  return(plot)
+}
+
+{
+  feature <- c("Trem2")
+  pergroup_gexp_plot(
+    exp_mat = vst_counts_df, 
+    feature = feature, 
+    grouping_var = "group")
+}
+```
+
+```{r load metadata gene sets}
+{
+    glialreactivity_list <- read_all_sheets(file = file.path("data", "bulk", "metanalysis", "SupplementaryTable4_Metanalysis_GlialReactivityMarkers.xlsx")) %>% purrr::map(1)
+    prefixes <- c("Escartin", "Pandey", "SF")
+    gr_selected <- glialreactivity_list[grep(paste0("^(", paste(prefixes, collapse = "|"), ")"), names(glialreactivity_list))] # select the desired gene lists
+    markers <- c(markers, gr_selected)
+    gr_df <- tibble(set = "Glial Reactivity Markers", marker = names(gr_selected))
+    markers_df <- c(markers_df, list(gr_df))
+}
+```
+
+```{r compute the module score}
+gene_set <- c(c("Apoe", "Trem2"))
+gene_set_ensembl <- gene_set %>% mapIds(org.Mm.eg.db, keys = ., column = "ENSEMBL", keytype = "SYMBOL", multiVals = "first")
+
+dds <- AddGeneSetScore(
+    dds = dds, 
+    features = gene_set_ensembl, 
+    ctrl = 5, 
+    name = "Apoe_Trem2"
+)
+
+colData(dds)
+summary(dds$Apoe_Trem21)
+
+ggplot(as.data.frame(colData(dds)), aes(x = time, y = Apoe_Trem21, color = injury)) + 
+    geom_point() +
+    theme_bw() + 
+    ylab("Regulation of random test set") + 
+    theme(text = element_text(size = 18))
+
+```
+
+# Functional enrichment
+
+```{r Prep Deseq markers for Functional Enrichment}
+## prep file for gsea
+deseq.gsea <- lapply(timepoint, function(x){ ## creating ranked list for GSEA
+  deseq.vector <- deseq.list[[x]][['log2FoldChange']]
+  names(deseq.vector) <- deseq.list[[x]][['symbol']]
+  deseq.vector %<>% .[!is.na(names(deseq.vector))] # filter out genes without a symbol
+  deseq.vector %<>% sort(decreasing = TRUE)
+}); names(deseq.gsea) <- timepoint
+```
+
+GSEA
+```{r run GSEA}
+## run GSEA 
+library(clusterProfiler)
+
+deseq.gsea %>% names
+
+GSEA.list <- lapply(deseq.gsea, function(x) {
+  temp <- gseGO(geneList = x,
+            ont = 'BP',
+            OrgDb = org.Mm.eg.db, 
+            minGSSize = 10, 
+            maxGSSize = 500, 
+            pvalueCutoff = 0.01, 
+            keyType = 'SYMBOL', 
+            pAdjustMethod = 'fdr', 
+            verbose = T) %>% clusterProfiler::simplify()
+  return(temp)
+}); GSEA.list <- lapply(GSEA.list, arrange, p.adjust)
+
+# save the GSEA bulk results
+# write.xlsx(GSEA.list, file = file.path(wsbulk, "GSEAlists_MCAO_bulk.xlsx"), overwrite = T)
+```
+
+Heatmap of enriched terms in bulk data
+```{r heatmap of enriched bulk gsea}
+# Extract the 'result' dataframe from each gseaResult object and add a timepoint column
+combined_gsea_df <- lapply(names(GSEA.list), function(timepoint){
+  GSEA.list[[timepoint]]@result %>% 
+    select(GeneSet = ID, NES, Description) %>% 
+    mutate(timepoint = timepoint)
+}) %>% bind_rows() %>% 
+  filter(NES > 0) %>%   # keep only positive enrichments
+  mutate(timepoint = str_replace_all(timepoint, c("24h" = "bulk 1DPI", "3d" = "bulk 3DPI", "7d" = " bulk 7DPI"))) # unify the naming
+
+# Pivot the data for heatmap
+heatmap_data <- combined_gsea_df %>%
+  pivot_wider(names_from = timepoint, values_from = NES) %>%
+  replace(is.na(.), 1) %>%  # Replace NA values with 0
+  column_to_rownames("GeneSet") %>%
+  select(-Description) %>% 
+  as.matrix()
+
+# Create the heatmap
+heatmap_data_rowhclust <- heatmap_data %>% 
+  dist %>% hclust() # pre-cluster the terms for easier row names access later
+
+ht <- pheatmap::pheatmap(heatmap_data,
+         scale = "none",
+         cluster_rows = heatmap_data_rowhclust , 
+         cluster_cols = FALSE, 
+         color = viridis::viridis(50, option = "rocket", direction = -1),  # Use the 'rocket' palette
+         show_rownames = FALSE,
+         show_colnames = TRUE, 
+         angle_col = 0,
+         treeheight_row = 10)
+# export the image
+
+# save heatmap input as xlsx
+heatmap_data[heatmap_data_rowhclust$order,] %>% 
+  as.data.frame() %>% rownames_to_column(var = "GOterms") %>% mutate("GOID_Description" = combined_gsea_df$Description[match(GOterms, combined_gsea_df$GeneSet)]) %>% 
+  write.xlsx(file = file.path(wsbulk, "BulkEnrichment_D1_to_D7_NESvalues.xlsx"))
+
+```
+
+ORA
+```{r run ORA}
+## run ORA
+library(clusterProfiler); library(org.Mm.eg.db)
+
+deseq.markers.up %>% glimpse ## time-specific marker genes are used
+deseq.ora <- lapply(deseq.markers.up, function(x) x %>% pull('symbol'))
+
+ORA.list <- lapply(deseq.ora, function(x) {
+  temp <- enrichGO(gene = x,
+            ont = 'BP',
+            OrgDb = org.Mm.eg.db, 
+            minGSSize = 10, 
+            maxGSSize = 500, 
+            pvalueCutoff = 0.01, 
+            keyType = 'SYMBOL', 
+            pAdjustMethod = 'fdr') %>% clusterProfiler::simplify()
+  return(temp)
+}); ORA.list <- lapply(ORA.list, arrange, p.adjust)
+
+# save the ORA bulk results
+# write.xlsx(ORA.list, file = file.path(wsbulk, "ORAlists_MCAO_bulk.xlsx"), overwrite = T)
+```
+
+Bulk volcano plot
+```{r bulk Volcano plot}
+library(EnhancedVolcano)
+timepoint <- deseq.list %>% names
+timepoint
+TimeToPlot <- '24h' ## or '3d', or '7d'... choose from the timepoints
+
+topT <- deseq.list[[TimeToPlot]]
+
+keyvals.colour <- ifelse(
+  topT$log2FoldChange < -0.6 & topT$padj < 0.1, '#3288BD',
+  ifelse(topT$log2FoldChange > 0.6 & topT$padj < 0.1, '#D53E4F',
+         '#E7E7E7')) 
+names(keyvals.colour)[keyvals.colour == '#3288BD'] <- 'downregulated'; names(keyvals.colour)[keyvals.colour == '#D53E4F'] <- 'upregulated'; names(keyvals.colour)[keyvals.colour == '#E7E7E7'] <- 'insignificant'
+
+p <- EnhancedVolcano(toptable = deseq.list[[TimeToPlot]],
+                     lab = "",
+                     x = 'log2FoldChange',
+                     y = 'padj',
+                     axisLabSize = 12,
+                     titleLabSize = 14,
+                     title = "",
+                     pCutoff = 0.1,
+                     colAlpha = 0.7,
+                     colCustom = keyvals.colour,
+                     subtitleLabSize = 9,
+                     FCcutoff = 0.58,
+                     labSize = 4,
+                     pointSize = 1.0,
+                     drawConnectors = T,
+                     maxoverlapsConnectors = Inf,
+                     arrowheads = F,
+                     boxedLabels = T,
+                     cutoffLineType = "blank") + theme_light(); p
+```
+
+Comparing bulk and spatial markers
+```{r Comparing bulk and spatial markers}
+# bulk markers
+deseq.markers_df <- readr::read_tsv(file = file.path(wsbulk, "DESeq2_bulkMCAO_DEGs_Timepoint_Markers.tsv"))
+deseq_markers_up <- deseq.markers_df %>% filter(log2FoldChange > 0 & padj < 0.01) %>% pull(entrezid)
+
+# spatial markers
+exists("st_markers_ens") # prepared in the chunk on Explained Variance
+
+# overlap between bulk and ST markers
+deseq_markers_up %>% length
+st_markers_ens %>% length
+intersect(deseq_markers_up, st_markers_ens) %>% length()
+
+
+
+## spatial marker file
+markers <- read_all_sheets(file = file.path(ws, "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx"))
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds")
+
+## total overlap of bulk and spatial markers
+spatial.seurat@assays$SCT %>% dim
+total.population <- 19909 ## number of SCT spatial genes
+bulkset <- list(
+  'D1' = deseq.markers.up[['24h']]["log2FoldChange" > 0.58] %>% .[["symbol"]],
+  'D3' = deseq.markers.up[['3d']]["log2FoldChange" > 0.58] %>% .[["symbol"]],
+  'D7' = deseq.markers.up[['7d']]["log2FoldChange" > 0.58] %>% .[["symbol"]]
+)
+spatialset <- list(
+  'D1' = c(markers[['ISD1c']]["avg_log2FC" > 0.58] %>% .[["gene"]],
+           markers[['ISD1p']]["avg_log2FC" > 0.58] %>% .[["gene"]]) %>% unique,
+  'D3' = c(markers[['ISD3c']]["avg_log2FC" > 0.58] %>% .[["gene"]],
+           markers[['ISD3p']]["avg_log2FC" > 0.58] %>% .[["gene"]]) %>% unique,
+  'D7' = c(markers[['ISD7c']]["avg_log2FC" > 0.58] %>% .[["gene"]],
+           markers[['ISD7p']]["avg_log2FC" > 0.58] %>% .[["gene"]]) %>% unique
+)
+
+
+# Intersections
+int.genelist <- list()
+
+## D1
+int <- intersect(bulkset[[1]], spatialset[[1]]) %>% length; c("Intersect" = int, "Bulk_left" = (bulkset[[1]] %>% length) - int, "Spatial_left" = (spatialset[[1]] %>% length) - int)
+int.genelist[["D1"]] <- intersect(bulkset[[1]], spatialset[[1]])
+  
+dat <- data.frame(
+  "bulk_positive" = c(28, 164),
+  "bulk_negative" = c(238, 19909 - 28 - 164 - 238),
+  stringsAsFactors = F, row.names = c("spatial_positive", "spatial_negative")
+);dat; mosaicplot(dat, color = T, main = "D1")
+
+chisq.test(dat)$expected
+fisher.test(dat, alternative = 'greater') ## pval < 2.2e-16
+phyper(q = dat[1,1] - 1, # white balls drawn (overlap of spatial genes with bulk)
+                           m = dat[,1] %>% sum, # number of bulk markers
+                           n = (19909 - (dat[,1] %>% sum)), # number of black balls (background transcriptome - bulk markers)
+                           k = (dat[1,] %>% sum), lower.tail = F) # number of drawn balls (spatial set)
+
+
+## D3
+int <- intersect(bulkset[[2]], spatialset[[2]]) %>% length; c("Intersect" = int, "Bulk_left" = (bulkset[[2]] %>% length) - int, "Spatial_left" = (spatialset[[2]] %>% length) - int)
+int.genelist[["D3"]] <- intersect(bulkset[[2]], spatialset[[2]])
+dat <- data.frame( ##D3
+  "bulk_positive" = c(359, 1116),
+  "bulk_negative" = c(532, 19909 - 359 - 1116 - 532),
+  stringsAsFactors = F, row.names = c("spatial_positive", "spatial_negative")
+);dat; mosaicplot(dat, color = T, main = "D3")
+chisq.test(dat)$expected
+chisq.test(dat)
+fisher.test(dat, alternative = 'greater') ## pval < 2.2e-16
+phyper(q = dat[1,1] - 1, # white balls drawn (overlap of spatial genes with bulk)
+                           m = dat[,1] %>% sum, # number of bulk markers
+                           n = (19909 - (dat[,1] %>% sum)), # number of black balls (background transcriptome - bulk markers)
+                           k = (dat[1,] %>% sum), lower.tail = F) # number of drawn balls (spatial set)
+## p-val
+
+##D7
+int <- intersect(bulkset[[3]], spatialset[[3]]) %>% length; c("Intersect" = int, "Bulk_left" = (bulkset[[3]] %>% length) - int, "Spatial_left" = (spatialset[[3]] %>% length) - int)
+int.genelist[["D7"]] <- intersect(bulkset[[3]], spatialset[[3]])
+dat <- data.frame(
+  "bulk_positive" = c(412, 384),
+  "bulk_negative" = c(1558, 19909 - 412 - 384 - 1558),
+  stringsAsFactors = F, row.names = c("spatial_positive", "spatial_negative")
+);dat; mosaicplot(dat, color = T, main = "D7")
+chisq.test(dat)$expected
+chisq.test(dat)
+fisher.test(dat, alternative = 'greater') ## pval < 2.2e-16
+phyper(q = dat[1,1] - 1, # white balls drawn (overlap of spatial genes with bulk)
+                           m = dat[,1] %>% sum, # number of bulk markers
+                           n = (19909 - (dat[,1] %>% sum)), # number of black balls (background transcriptome - bulk markers)
+                           k = (dat[1,] %>% sum), lower.tail = F) # number of drawn balls (spatial set)
+
+## save the list of overlapping genes
+for(i in 1:length(int.genelist)){write.csv(int.genelist[i], file = file.path(wsbulk, paste0("results/Markers_Overlap_bulk_and_spatial_", names(int.genelist)[i], ".txt")), row.names = F, quote = F)}
+```
+
+```{r sessionInfo}
+sessionInfo()
+```
+
+# Deconvolution
+Using CibersortX to decode cell type compositional changes. The reference single-cell dataset was re-analyzed Zeng 2023.
+
+load libraries and datasets
+```{r load datasets}
+# bulk data
+load(file = file.path("data", "bulk", "MCAO_bulk_gexp_objects.Rdata"))
+
+# result list from CCI on periphery
+load(file = file.path("data", "ResultList_1DP_06.Rdata"))
+
+# single-cell reference
+library(Seurat)
+seurat <- readRDS(file = "data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds")
+```
+
+Prepare single-cell reference matrix
+```{r prep sc ref matrix}
+# get cell type annotation with max of 3k occurences
+celltypes_df <- seurat@meta.data %>% 
+  rownames_to_column("Barcodes") %>% 
+  dplyr::select(Barcodes, CellTypeClass) %>% 
+  dplyr::mutate(CellTypeClass = as.character(CellTypeClass)) %>% 
+  group_by(CellTypeClass) %>% 
+  slice_sample(n = 3000, replace = FALSE) %>% 
+  ungroup()
+
+# convert the refmat matrix to df
+ref_mat <- seurat %>% 
+  GetAssayData(assay = "RNA", layer = "counts") %>% 
+  as.matrix %>% 
+  as.data.frame() %>% 
+  dplyr::select(all_of(celltypes_df$Barcodes)) %>% # 
+  dplyr::filter(rowSums(.) > (ncol(.) / 1000)) %>%  # keep genes with counts at least one count in every 1000 cells
+  rownames_to_column("GeneSymbol")
+
+# reorder celltypes_df names to match with ref_mat -> cell names assignment
+celltypes_df %<>%
+  dplyr::slice(match(colnames(ref_mat), Barcodes))
+
+colnames(ref_mat) <- c("GeneSymbol", celltypes_df$CellTypeClass)
+colnames(ref_mat) %<>% stringr::str_remove(., pattern = "[.][0-9]+$") # repair the changed names
+
+# save the ref mat
+data.table::fwrite(ref_mat, 
+                   file = file.path(wsbulk, "CibersortX_RefMat_Zeng2023.tsv"), 
+                   sep = "\t", 
+                   row.names = FALSE, 
+                   col.names = TRUE)
+```
+
+```{r prep bulk data}
+# bulk count matrix
+bulk_mat <- dds@assays@data@listData[["counts"]] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("EnsemblIDs")
+bulk_mat[1:5, 1:5]
+
+# convert from ensembl genes to genesymbols
+genesymbol_rownames <- data.frame(
+  "EnsemblIDs" = bulk_mat$EnsemblIDs
+) %>% 
+  dplyr::mutate(GeneSymbol = EnsemblIDs %>% mapIds(org.Mm.eg.db, 
+                                                   keys = .,
+                                                   column="SYMBOL",
+                                                   keytype="ENSEMBL",
+                                                   multiVals="first")) %>% 
+  dplyr::filter(!isNA(GeneSymbol))
+
+# filter bulk_mat and add Gene Symbol
+bulk_mat %<>% 
+  dplyr::filter(EnsemblIDs %in% (genesymbol_rownames %>% pull(EnsemblIDs))) %>% 
+  dplyr::right_join(genesymbol_rownames) %>% 
+  dplyr::select(GeneSymbol, everything(), -EnsemblIDs)
+
+data.table::fwrite(bulk_mat, 
+                   file = file.path(wsbulk, "CibersortX_MCAO_Bulk_mat.tsv"), 
+                   sep = "\t", 
+                   row.names = FALSE, 
+                   col.names = TRUE)
+
+```
+
+load CibersortX results
+```{r load CibersortX results}
+bulk.results[["CibersortX_Fractions"]] <- read.table(file = file.path(wsbulk, "CIBERSORTx_Results_Fractions_MCAO.csv"), 
+                           header = T, 
+                           sep = ",")
+```
+
+```{r prep cibersortx results}
+exists("samplesDESeq")
+cibersort <- bulk.results[["CibersortX_Fractions"]] %>% 
+  dplyr::select(-c(P.value, Correlation, RMSE, Absolute.score..sig.score.)) %>% 
+  dplyr::rename(SampleName = Mixture) %>% 
+  column_to_rownames(var = "SampleName")
+
+# normalize the rowSums = 1
+cibersort <- cibersort / rowSums(cibersort)
+
+# add samplesDESeq groupings
+cibersort %<>% 
+  rownames_to_column("SampleName") %>% 
+  dplyr::right_join(samplesDESeq) %>% 
+  dplyr::select(-c(countf, replicate, batch, injury)) %>%
+  column_to_rownames("SampleName")
+
+cibersort %>% glimpse
+
+# Generalized linear model (GLM) to test for the differences in cell type proportions.
+library(MASS)
+glm_result <- lm(cbind(Astrocytes, Microglia, Neurons, OLs) ~ time * condition, data = cibersort)
+glm_summary <- summary(glm_result)
+glm_summary
+highlighted_p_values <- c(
+  Astrocytes = 0.4437, 
+  Microglia = 0.0008595 %>% round(4), 
+  Neurons = 0.000428 %>% round(4), 
+  OLs = 0.6699
+)
+
+# Define cell types to color
+highlighted_celltypes <- c("Astrocytes", "Microglia", "Neurons", "OLs")
+
+# Modify the data for plotting
+cibersort_summary <- cibersort %>%
+  group_by(group) %>%
+  summarise(across(
+    starts_with("Astrocytes"):starts_with("VSMCs"),
+    list(mean = ~ mean(.)*100, sd = ~ sd(.)*100),
+    .names = "{col}_{fn}"
+  ), .groups = "drop") %>%
+  ungroup() %>%
+  pivot_longer(
+    cols = "Astrocytes_mean":"VSMCs_sd",
+    names_to = c("CellType", ".value"),
+    names_sep = "_"
+  ) %>%
+  mutate(CellType = ifelse(CellType %in% highlighted_celltypes, CellType, "Others"))
+
+# Create a custom color palette
+custom_colors <- col.list$zeng.cols[highlighted_celltypes]
+custom_colors <- c(custom_colors, "Others" = "grey80")
+
+# Calculate cumulative sums for mean values to position error bars
+error_bars <- cibersort_summary %>%
+  arrange(group, factor(CellType, levels = c(highlighted_celltypes, "Others"))) %>%
+  group_by(group) %>%
+  mutate(cumulative_mean = 100 - (cumsum(mean) - mean)) %>%
+  ungroup()
+
+exact_values <- cibersort %>%
+  select(group, Astrocytes, Microglia, Neurons, OLs) %>%
+  pivot_longer(
+    cols = c(Astrocytes, Microglia, Neurons, OLs),
+    names_to = "CellType",
+    values_to = "value"
+  ) %>% 
+  mutate(value = value * 100)
+
+# Create a barplot for Neurons and Microglia with error bars and exact values
+ggplot(
+  cibersort_summary %>% filter(CellType %in% c("Neurons", "Astrocytes", "Microglia", "OLs")),
+  aes(x = group, y = mean, fill = CellType)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9), alpha = 0.5, color = "black") +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                width = 0.2,
+                position = position_dodge(0.9)) +
+  geom_jitter(
+    data = exact_values,
+    aes(x = group, y = value, color = CellType),
+    position = position_dodge(0.9),
+    size = 2, 
+    # width = 0.2, 
+    alpha = 0.5
+  ) +
+  scale_fill_manual(values = col.list$zeng.cols) +  # Custom colour manual scale
+  scale_color_manual(values = col.list$zeng.cols) +  # Custom colour for dots
+  labs(x = NULL,
+       y = "Proportion (%)",
+       fill = "Cell Type",
+       color = "Cell Type") +
+  scale_x_discrete(labels = c("No MCAO", "1DPI", "3DPI", "7DPI")) +
+  theme_mk + 
+  theme(legend.position = "bottom")
+
+# plot the continuity of change
+ggplot(cibersort_summary %>% filter(CellType %in% c("Neurons", "Astrocytes", "Microglia", "OLs")), 
+       aes(x = group, y = mean, color = CellType, group = CellType)) +
+  geom_line(position = position_dodge(0.5), size = 1, alpha = 0.5) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                width = 0.2, position = position_dodge(0.5)) +
+  geom_jitter(data = exact_values, aes(x = group, y = value, color = CellType),
+              position = position_dodge(0.5), size = 2, alpha = 0.5) +
+  scale_color_manual(values = col.list$zeng.cols) +  # Custom colour manual scale
+  labs(x = NULL, y = "Proportion (%)", color = "Cell Type") +
+  scale_x_discrete(labels = c("No MCAO", "1DPI", "3DPI", "7DPI")) +
+  theme_mk + 
+  theme(legend.position = "bottom")
+```
+
+Sample composition - stacked barplot with error bars.
+```{r stacked barplot for neurons and glia}
+# Create the stacked bar plot
+ggplot(cibersort_summary, aes(x = group, y = mean, fill = CellType)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", alpha = 0.7, width = 0.8) +
+  geom_errorbar(data = error_bars %>% filter(CellType %in% highlighted_celltypes), 
+                aes(x = group, ymax = cumulative_mean, ymin = cumulative_mean - sd),
+                width = 0.2, color = "black") +
+  scale_fill_manual(values = custom_colors) +  # Apply custom colors
+  labs(x = NULL, y = "Proportion (%)", fill = "Cell Type") +
+  scale_x_discrete(labels = c("No MCAO", "1DPI", "3DPI", "7DPI")) +
+  theme_mk +
+  theme(legend.position = "bottom") + 
+  annotate("text", x = 5, y = 95.25, label = expression(italic("P = 0.4437")), color = "#02818A", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 5, y = 84.65, label = expression(italic("P = 0.0009")), color = "#A50F15", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 5, y = 59.5, label = expression(italic("P = 0.0004")), color = "#307faf", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 5, y = 37.85, label = expression(italic("P = 0.6699")), color = "#8C96C6", size = 2.45, hjust = 1.5) + 
+  expand_limits(x= c(1, 5))
+```
+
+Comparing the deconvolution results bulk CibersortX vs spatial RCTD
+```{r comparing deconvo bulk vs spatial}
+# get spatial proportions summarized
+spatial.seurat <- readRDS(file = file.path("data", "seurat_spatial_1DP_06.Rds"))
+md <- spatial.seurat@meta.data
+md %<>%
+  select(starts_with("RCTD_"), Condition)
+
+spatial_summary <- md %>% 
+  rename_with(~ str_remove(., "^RCTD_")) %>% 
+  group_by(Condition) %>% 
+  summarise(across(everything(), list(mean = mean), .names = "mean_{col}")) %>% 
+  mutate(DataType = rep("Spatial", length.out = nrow(.))) %>% 
+  select(Condition, DataType, everything())
+
+# get bulk cibersort results summarized
+cibersort_summary2 <- cibersort %>% 
+  select(-c(condition, time)) %>% 
+  group_by(group) %>% 
+  summarise(across(everything(), list(mean = mean), .names = "mean_{col}")) %>% 
+  mutate(DataType = rep("Bulk", length.out = nrow(.)), 
+         Condition = case_when(
+           group == "NoMCAO" ~ "Ctrl", 
+           group == "24h" ~ "1DPI", 
+           group == "3d" ~ "3DPI", 
+           group == "7d" ~ "7DPI"
+         )) %>% 
+  select(Condition, DataType, everything(), -group)
+
+# join the two deconvo dfs together
+deconvo_compare <- spatial_summary %>% 
+  bind_rows(cibersort_summary2) %>% 
+  mutate(across(starts_with("mean_"), ~ . * 100)) %>% 
+  rename_with(~ str_remove(., "^mean_")) %>% 
+  pivot_longer(cols = "Astrocytes":"VSMCs", names_to = "celltype", values_to = "value")
+
+# separate the data by DataType
+spatial_data <- deconvo_compare %>% filter(DataType == "Spatial")
+bulk_data <- deconvo_compare %>% filter(DataType == "Bulk")
+
+# Merge the dataframes based on Condition and cell_type
+merged_data <- spatial_data %>%
+  select(Condition, celltype, value) %>%
+  rename(spatial_value = value) %>%
+  inner_join(bulk_data %>% 
+               select(Condition, celltype, value) %>% 
+               rename(bulk_value = value),
+             by = c("Condition", "celltype")) %>% 
+  mutate(Condition = factor(Condition, levels = c("Ctrl", "1DPI", "3DPI", "7DPI")))
+
+
+# how well the two are matched? Predicting bulk deconvo values from spatial deconvo
+model <- lm(bulk_value ~ 0 + spatial_value, data = merged_data) # a linear model assuming intercept = 0
+summary(model)
+summary(model)$r.squared ## Spatial deconvolution is a good predictor of bulk deconvo with R^2 = 0.893
+
+# how close is it to perfect match (y = x)? Modeling how well does their relationship answer to y = x.
+SS_res <- sum((merged_data$spatial_value - merged_data$bulk_value)^2)
+SS_tot <- sum((merged_data$spatial_value - mean(merged_data$spatial_value))^2)
+r_squared <- (1 - (SS_res / SS_tot)) %>% round(3)
+print(r_squared)
+
+# Calculating Concordance Correlation Coefficient (CCC) - a measure of how good the values fit the '45 degree line'
+library(epiR)
+ccc_result <- epiR::epi.ccc(merged_data$spatial_value, merged_data$bulk_value)
+ccc <- ccc_result$rho.c[[1]] %>% round(3)
+print(ccc)
+
+# create the scatter plot
+merged_data %>% 
+  ggplot(aes(x = spatial_value, y = bulk_value, color = celltype, shape = Condition)) +
+  geom_point(size = 3) +
+  annotate("text", x = 30, y = 60, label = expression(italic(rho[c] == 0.879)), size = 2.45) +
+  labs(x = "Spatial Deconvoluted Proportions", y = "Bulk Deconvoluted proportions", color = "Cell Type", shape = "Condition") +
+  coord_cartesian(xlim = c(0, 70), ylim = c(0, 70)) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey80") + 
+  scale_color_manual(values = col.list$zeng.cols) + 
+  scale_shape_manual(values = c("Ctrl" = 3, "1DPI" = 18, "3DPI" = 17, "7DPI" = 15)) + 
+  scale_x_continuous(trans = "log1p", breaks = c(seq(0, 15, by = 5), seq(20, 80, by = 10))) +
+  scale_y_continuous(trans = "log1p", breaks = c(seq(0, 15, by = 5), seq(20, 80, by = 10))) +
+  theme_mk
+```
+
+Apoe-Trem2 in the bulk data
+```{r apoe trem in bulk data}
+vst_counts <- counts(dds, normalized = TRUE) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "EnsemblID") %>% 
+  mutate(GeneSymbol = EnsemblID %>% mapIds(org.Mm.eg.db, 
+           keys = ., 
+           column = "SYMBOL", 
+           keytype = "ENSEMBL", 
+           multiVals = "first")) %>% 
+  dplyr::select(GeneSymbol, everything(), -EnsemblID) %>% 
+  group_by(GeneSymbol) %>%
+  summarise(across(everything(), sum), .groups = "drop") %>% # sum the counts over gene isoforms
+  dplyr::filter(!isNA(GeneSymbol)) %>% # remove genes without a gene symbol
+  column_to_rownames(var = "GeneSymbol") %>% 
+  t %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "SampleName") %>% 
+  right_join(samplesDESeq, by = "SampleName")
+
+apoe_trem <- vst_counts %>% 
+  select(SampleName, group, Apoe, Trem2) %>% 
+  mutate(across(c(Apoe, Trem2), ~ scale(.) %>% as.vector)) # z-score the gene columns
+
+print(apoe_trem)
+
+# statistical test
+manova_results <- manova(cbind(Apoe, Trem2) ~ group, data = apoe_trem)
+summary(manova_results)
+
+# modify from df to long df
+apoe_trem_long <-
+  apoe_trem %>% pivot_longer(cols = c(Apoe, Trem2),
+                             names_to = "variable",
+                             values_to = "value")
+
+```
+
+Processes found downstream of Apoe-Trem, shown in bulk
+```{r downstream apoe trem processes shown in bulk}
+downstream_go <- result.list$GO_apoe_trem_downstream_df
+downstream_go_list <- downstream_go %>% 
+  dplyr::select(Description, geneID) %>% 
+  dplyr::mutate(
+    Description = Description %>% stringr::str_to_sentence() %>% paste0("GO_", .), 
+    geneID = geneID %>% str_split(pattern = "/")
+  ) %>% 
+  mutate(geneID = map(geneID, as.character)) %>% 
+  { set_names(.$geneID, .$Description)}
+
+# loop to add the gene set score
+for(i in seq_along(downstream_go_list)){
+  set_name <- names(downstream_go_list)[i]
+  features <- downstream_go_list[[i]] %>% mapIds(org.Mm.eg.db, keys = ., column = "ENSEMBL", keytype = "SYMBOL", multiVals = "first")
+  dds <- AddGeneSetScore(
+    dds = dds, 
+    features = features, 
+    ctrl = 5, 
+    name = set_name)
+}
+
+dds_colnames <- colData(dds) %>% colnames %>% tail(length(downstream_go_list))
+dds_colnames
+
+# create long dataframe for easier ggplotting
+bulk_processes_long <- dds %>% 
+  colData() %>% 
+  as.data.frame(row.names = rownames(.)) %>% 
+  rownames_to_column(var = "SampleName") %>% 
+  pivot_longer(cols = all_of(dds_colnames), names_to = "process", values_to = "value")
+
+# reorder the samplenames Ctrl -> Sham -> MCAO
+custom_order <- function(x) {
+  if (str_detect(x, "_Ctrl_")) {
+    return(1)
+  } else if (str_detect(x, "_SH_")) {
+    return(2)
+  } else {
+    return(3)
+  }
+}
+unique_sample_names <- 
+  bulk_processes_long$SampleName %>% 
+  unique %>% 
+  data.frame(SampleName = .) %>% 
+  mutate(order = sapply(SampleName, custom_order)) %>% 
+  arrange(order, SampleName) %>% 
+  pull(SampleName)
+
+bulk_processes_long %<>% 
+  mutate(SampleName = factor(SampleName, levels = unique_sample_names), 
+         time = time)
+
+# statistical testing of the significance
+bulk_processes_stat_results <- bulk_processes_long %>% 
+  group_by(process) %>% 
+  summarise(p_value = wilcox.test(value ~ injury)$p.value) %>% 
+  mutate(adj_p_value = p.adjust(p_value, method = "BH") %>% round(4), 
+         significance = case_when(
+           adj_p_value < 0.001 ~ "***", 
+           adj_p_value < 0.01 ~ "**", 
+           adj_p_value < 0.05 ~ "*", 
+           TRUE ~ "ns"
+         ))
+print(bulk_processes_stat_results)
+
+
+## see whether there are differences
+ggplot(bulk_processes_long, aes(x = time, y = value, color = injury)) + 
+  geom_point() +
+  theme_bw() + 
+  ylab("Regulation of Processes") + 
+  theme(text = element_text(size = 18)) +
+  facet_wrap(~ process, scales = "free_y")  # Creates a panel layout with one plot for each process
+```
+
+save bulk results for Fig 3
+```{r save bulk fig3 results}
+save(cibersort_summary, error_bars, highlighted_celltypes, custom_colors, vst_counts, apoe_trem_long, bulk_processes_long, bulk_processes_stat_results, merged_data, 
+     file = file.path("data", "BulkResults_1DP_07.Rdata"))
+```
+
+
+

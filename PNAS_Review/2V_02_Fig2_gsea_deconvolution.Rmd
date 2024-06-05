@@ -1,0 +1,466 @@
+---
+title: "2V_02_Fig2_gsea_deconvolution"
+author: "DanielZucha"
+date: "2024-05-11"
+output: html_document
+---
+
+
+Hello, 
+
+In this markdown we prepare the visual representations for the figure 2, summarizing the biological processes and cell types present in the lesioned areas. To develop a general understanding of altered processed, we submitted the regional markers genes for gene enrichment analysis using the online [MetaScape tool](https://metascape.org/gp/index.html#/main/step1). The enrichment was for performed for each lesional area (area + time) separately. The MetaScape allows a network for visualisation purposes, drawing the general scheme of events. To assess cell type distribution, we used RCTD algorithm ([spacexr package](https://github.com/dmcable/spacexr)) developed by Cable et al. Being a reference-based deconvolution algorithm, we reanalyzed the publicly available [Zeng et al 2023](http://www.ncbi.nlm.nih.gov/pubmed/37063847) single-cell stroke [dataset](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE227651) as it matched our experimental design and cell types of all plausible classes were included, i.e. neurons, glial cells, vascular or peripheral immune cells.
+
+Input files:
+- "Metascape_xx_UP.xlsx" # MetaScape excel sheets with gene set enrichment outputs
+- "seurat_spatial_integrated_ready_rctdZeng2023.rds" # Seurat spatial object with deconvo results 
+
+
+```{r libraries}
+# daily libraries
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(openxlsx)
+library(magrittr)
+library(stringr)
+library(patchwork)
+
+# graphics
+library(circlize)
+library(grid)
+library(magick)
+
+# sourcing custom functions and color palettes
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+# ws
+if(!dir.exists("ws")){dir.create("ws")
+  ws <- "ws"}else{ws <- "ws"}
+
+# lists
+plot.list <- list()
+result.list <- list()
+```
+
+load data
+```{r load data}
+# spatial seurat processed with a standardized seurat pipeline
+spatial.seurat <- readRDS(file = file.path("data", "seurat_spatial_integrated_ready_rctdZeng2023.rds"))
+
+# Gene set enrichment results (Metascape)
+
+
+# misc 
+sections <- c("Ctrl", "1DPI", "3DPI", "7DPI")
+ctx_regions <- c("CTX1-4", "CTX5", "CTX6", "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p")
+```
+
+# Functional Annotation
+load the summarizing GO parent terms
+```{r GO parents}
+result.list[["Enrichments"]] <- readRDS(file = file.path("ws", "Metascape_GO_parent_terms.Rds"))
+result.list[["Enrichments"]] %>% glimpse
+```
+
+```{r GO summaries as module scores}
+# get the gene lists of GO summary parent terms
+result.list[["GOsummaries"]] <- list()
+for (i in result.list[["Enrichments"]][["Process_Description"]]) {
+  # select the gene symbols of every process
+  temp <-  result.list[["Enrichments"]] %>%
+    filter(Process_Description %in% i) %>%
+    pull(Symbols) %>%
+    strsplit(",")
+  
+  # append the results
+  result.list[["GOsummaries"]] %<>% append(temp)
+}
+names(result.list[["GOsummaries"]]) <-
+  result.list[["Enrichments"]] %>% pull(Process_Description)
+
+# turn the GO summaries into module scores.
+spatial.seurat %<>% AddModuleScore(features = result.list[["GOsummaries"]],
+                                   name = names(result.list[["GOsummaries"]]),
+                                   assay = "SCT")
+
+# remove environmental variables
+rm(i, temp)
+```
+
+
+
+
+
+# Deconvolution
+
+First, we start by looking at the neuronal content in the cortex. The lesions have significantly less neuronal content.
+```{r neuronal content in ctx}
+# neuronal loss
+{
+  temp <- spatial.seurat@meta.data %>% filter(
+    BrainAreas %in% c("Cortex", "Lesion")
+  ) %>% select(Condition, BrainAreas, RCTD_Neurons)
+
+  t.test(RCTD_Neurons ~ BrainAreas, data = temp)
+  
+  plot.list[["DensityPlot_NeuronalContent"]] <- ggplot(temp, aes(.data[["RCTD_Neurons"]], fill = .data[["BrainAreas"]])) + 
+    geom_density(alpha = 0.8, color = "white", linewidth = 0.5) +
+    scale_x_reverse() +
+    annotate(geom = "text", x = 0.17, y = 8, label = "P < 2e-16", hjust = 0, vjust = 0.5, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    annotate(geom = "text", x = 0.4, y = 9, label = "Lesioned cortex", hjust = 0, vjust = 0.5, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    annotate(geom = "text", x = 0.95, y = 9, label = "Intact cortex", hjust = 0, vjust = 0.5, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    geom_vline(xintercept = 0.75, color = "black", linetype = "dotted", linewidth = 0.5) +
+    scale_fill_manual(values = col.list$BrainAreas) + 
+    theme_mk +
+    remove_grid +
+    theme(legend.position = c(0.85, 0.8)) +
+    labs(x = "Per-spot neuronal proportion", y = "Density", fill = NULL, title = "Cortical neuron content")
+  print(plot.list[["DensityPlot_NeuronalContent"]])
+}
+```
+
+Glial content
+```{r glial content}
+# glial rise
+{
+  temp <- spatial.seurat@meta.data %>% 
+    filter(BrainAreas %in% c("Cortex", "Lesion")) %>% 
+    select(Condition, BrainAreas, RCTD_Microglia, RCTD_Astrocytes, RCTD_OLs, RCTD_OPCs) %>% 
+    mutate(Glia = RCTD_Microglia + RCTD_Astrocytes + RCTD_OLs + RCTD_OPCs)
+  
+  t.test(Glia ~ BrainAreas, data = temp)
+  
+  plot.list[["DensityPlot_GlialContent"]] <- ggplot(temp, aes(.data[["Glia"]], fill = .data[["BrainAreas"]])) + 
+    geom_density(alpha = 0.8, color = "white", linewidth = 0.5) +
+    annotate(geom = "text", x = 0.77, y = 5.65, label = "P < 2e-16", hjust = 0, vjust = 0, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    scale_fill_manual(values = col.list$BrainAreas) + 
+    theme_mk +
+    remove_grid +
+    theme(legend.position = c(0.85, 0.75)) +
+    labs(x = "Per-spot glial proportion", y = "Density", fill = NULL, title = "Cortical glial content")
+  print(plot.list[["DensityPlot_GlialContent"]])
+}
+```
+
+
+What processes correlate well with neuronal decline? 
+1st plot: 
+
+- Correlation of neuronal decline and gene ontology terms (also plot visually!)
+```{r}
+
+```
+
+
+
+Summarizing stacked barplot to see the full overview of cell types
+```{r stacked barplot of rois}
+# celltypes of interest
+coi <- spatial.seurat@meta.data %>% colnames %>% stringr::str_subset(pattern = "^RCTD_")
+
+# df of celltypes of interest (coi) in the regions of interest (roi)
+spatial.seurat@meta.data[["DetailedRegionAnnoShort"]] %>% levels
+
+# are regions of interest defined?
+if(!exists("roi")){
+  roi <- c(
+  "CTX1-4", "CTX5", "CTX6", # intact cortex
+  "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p") # lesion
+  }
+
+df <- spatial.seurat@meta.data %>% 
+  filter(DetailedRegionAnnoShort %in% roi) %>% 
+  select(DetailedRegionAnnoShort, coi)
+
+# table of means for coi per roi
+mean_table <- df %>% 
+  group_by(DetailedRegionAnnoShort) %>% 
+  summarize(across(starts_with("RCTD_"), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>% 
+  column_to_rownames(var = "DetailedRegionAnnoShort") %>% 
+  "*"(100) %>% 
+  round(1) %>% 
+  rownames_to_column(var = "DetailedRegionAnnoShort")
+
+
+# Stacked bar plot
+{
+  long_data <- mean_table %>% 
+    pivot_longer(
+      cols = starts_with("RCTD_"), 
+      names_to = "CellType", 
+      values_to = "MeanValue"
+    ) %>% mutate(CellType = stringr::str_remove(CellType, "RCTD_"))
+  
+  # Create the plot
+  main_plot <- ggplot(long_data, aes(x = DetailedRegionAnnoShort, y = MeanValue, fill = CellType)) +
+    geom_bar(stat = "identity", alpha = 0.9, width = 0.75) + # Stacked bar plot
+    geom_text(aes(label = ifelse(MeanValue > 5, paste0(round(MeanValue, 1), "%"), "")), # display when >10%
+              position = position_stack(vjust = 0.5), 
+              size = 3, 
+              color = "white") +
+    scale_fill_manual(values = col.list$zeng.cols) +
+    labs(
+      x = NULL,
+      y = "Average Spot Composition (%)",
+      fill = "Cell Type"
+    ) + 
+    theme_mk & 
+    remove_grid
+  
+  ann_plot <- ggplot(long_data, aes(x = DetailedRegionAnnoShort, y = MeanValue)) +
+    geom_bar(stat = "identity", fill = NA) +
+    ylim(0, 1) + 
+    annotate("text", x = 2, y = 0.5, label = "Intact Cortex", vjust = 0.5, hjust = 0.5, size = 2.45) + 
+    annotate("segment", x = 0.5, xend = 3.45, y = 0.1, yend = 0.1, color = "grey", linewidth = 2) + 
+    annotate("text", x = 6.5, y = 0.5, label = "Lesion", vjust = 0.5, hjust = 0.5, size = 2.45) + 
+    annotate("segment", x = 3.55, xend = 9.5, y = 0.1, yend = 0.1, color = "#AF3039", linewidth = 2) + 
+    theme_void() & 
+      NoAxes()
+  
+  plot.list[["StackedBarPlot_RCTD_ROIcomposition"]] <- (ann_plot / main_plot) + plot_layout(heights = c(1,10))
+
+  # Display the plot
+  print(plot.list[["StackedBarPlot_RCTD_ROIcomposition"]])
+}
+```
+
+Close up on the lesion areas - pie chart
+```{r close up on the lesion areas}
+library(STdeconvolve)
+
+temp <- lapply(sections, \(section){
+  
+  # df of spot positions
+  pos <- spatial.seurat@images[[section]]@coordinates[, c("imagerow", "imagecol")] %>% 
+    rename(
+      x = imagecol, 
+      y = imagerow
+    ) %>% 
+    mutate(y = y %>% "*"(-1)) # turn the y coordinates upside-down
+  
+  # define spots in the area of interest
+  x.threshold <- (max(pos$x) - min(pos$x)) %>% "/"(5) %>% "+"(min(pos$x)) %>% round(0)
+  y.threshold <- (max(pos$y) - min(pos$y)) %>% "/"(5) %>% "+"(min(pos$y)) %>% round(0)
+  
+  pos %<>% filter(
+    x > x.threshold, 
+    y > y.threshold
+    )
+  
+  # names of spots to keep
+  spots.to.plot <- rownames(pos)
+  
+  # keep metadata for the area of interest
+  md <- spatial.seurat@meta.data %>% 
+    rownames_to_column("barcodes") %>% 
+    filter(barcodes %in% spots.to.plot) %>% 
+    column_to_rownames("barcodes")
+  
+  # prep data to plot
+  theta <- md %>% select(starts_with("RCTD_"))
+  groups <- md %>% pull(DetailedRegionAnnoShort)
+  group_cols <- col.list$cols_mono_short[match(x = groups, table = names(col.list$cols_mono_short))]
+  
+  # plot the pie charts
+  pie_chart <- vizAllTopics(
+    theta = theta, 
+    pos = pos, 
+    groups = groups, 
+    group_cols = group_cols, 
+    topicCols = col.list$zeng.cols, 
+    plotTitle = section, 
+    lwd = 0.15, 
+    r = 60, 
+    showLegend = F
+  )
+  
+  return(pie_chart)
+})
+
+names(temp) <- paste0("PieChart_RCTD_", sections)
+
+# patchwork the individual piecharts together
+plot.list[["PieChart_Lesion_CloseUp"]] <- patchwork::wrap_plots(temp, ncol = length(temp))
+rm(temp)
+
+print(plot.list[["PieChart_Lesion_CloseUp"]])
+```
+
+
+
+
+# Cell-cell interactions
+```{r load cci results}
+# load CCI results 
+spatalk.list <- list()
+for(section in sections){
+  load(file = file.path("data", paste0("SpaTalk_RefZeng2023_MCAO_spatial_full_", section, ".Rdata")))
+  spatalk.list[[section]] <- full_spatalk
+}
+
+rm(section, full_spatalk)
+```
+
+```{r chord diagram for the number of interactions}
+create_chord_diagram <- function(dec_spatalk_obj, section) {
+  
+  # summarize the 
+  lrpairs <- dec_spatalk_obj@lrpair %>% 
+    group_by(celltype_sender, celltype_receiver) %>% 
+    summarise(
+      total_lr_co_exp_num = sum(lr_co_exp_num), 
+      .groups = "drop"
+    )
+  
+  circlize::chordDiagram(
+    lrpairs, 
+    grid.col = col.list$zeng.cols, 
+    directional = 1, 
+    reduce = 0.04, 
+    annotationTrack = "grid", 
+    preAllocateTracks = list(track.height = 0.05)
+  )
+  
+  circos.track(
+    track.index = 1, 
+    panel.fun = function(x, y) {
+      circos.text(CELL_META$xcenter, 
+                  CELL_META$ylim[1] + 0.5, # moving the text slightly further away
+                  CELL_META$sector.index, 
+                  facing = "bending.outside", 
+                  niceFacing = TRUE)
+    }, 
+    bg.border = NA
+  ) # here set bg.border to NA is important
+  
+  title(section, line = -1)
+  circos.clear()
+}
+
+dev.off()
+
+# Create and save a layout for 4 plots side by side
+tiff(filename = file.path(ws, "ChordDiagram_CCI_counting_total.tiff"), res = 400, units = "cm", width = 43, height = 13)
+layout(matrix(1:4, 1, 4))
+
+# Loop to create and position each plot
+for(i in seq_along(sections)) {
+  par(mar = c(0.5, 0.5, 0.5, 0.5))
+  circos.par(cell.padding = c(0,0,0,0))
+  create_chord_diagram(
+    dec_spatalk_obj = spatalk.list[[i]], 
+    section = sections[i])
+}
+dev.off()
+
+# and load it back so it can be manipulated alongside ggplots
+plot.list[["ChordDiagram_totalCCI"]] <- magick::image_read(path = file.path(ws, "ChordDiagram_CCI_counting_total.tiff"))
+print(plot.list[["ChordDiagram_totalCCI"]])
+
+```
+
+# Making of Figure 2
+```{r wrap plot fig2}
+
+```
+
+
+# Supplementary figures
+
+
+Individual cell type populations in cortex vs lesion
+```{r vlnplot for individual coi}
+# choose celltypes of interest to plot
+coi_to_plot <- c(
+    "RCTD_Neurons",
+    "RCTD_Astrocytes",
+    "RCTD_Microglia",
+    "RCTD_OLs",
+    "RCTD_OPCs",
+    "RCTD_PeripheralMyeloidCells"
+  )
+
+# regions of interest
+roi <- c(
+  "CTX1-4", "CTX5", "CTX6", # intact cortex
+  "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p" # lesion
+  )
+
+plot.list[["VlnPlot_COI_in_ROI"]] <- spatial.seurat %>% enh_vlnplot(
+  feature = coi_to_plot, 
+  grouping = "BrainAreas", 
+  colors = col.list$BrainAreas, 
+  compare_means = T,
+  stat_test = "t.test", 
+  ref.group = "Cortex",
+  idents = roi, 
+  ncol = 6, 
+  combine = T
+) & 
+  theme_mk & 
+  remove_grid & 
+  xlab(NULL) & 
+  NoLegend()
+
+print(plot.list[["VlnPlot_COI_in_ROI"]])
+
+
+# change the plot names and keep just one legend
+plot.list[["VlnPlot_COI_in_ROI"]] <- lapply(seq_along(plot.list[["VlnPlot_COI_in_ROI"]]), \(plot){
+  
+  # define the plot title
+  title <- coi_to_plot[plot] %>% stringr::str_remove(pattern = "^RCTD_")
+  if(title == "PeripheralMyeloidCells"){title <- "Peripheral Myeloid Cells"}
+  
+  # define the plot output
+  ## give the first plot a y axis label and new title
+  if(plot == 1){
+    plot.list[["VlnPlot_COI_in_ROI"]][[plot]] <- plot.list[["VlnPlot_COI_in_ROI"]][[plot]] +
+      ggtitle(title) + 
+      ylab("Per-spot proportion")
+  } else {
+    # for the rest just fix the title
+   plot.list[["VlnPlot_COI_in_ROI"]][[plot]] <- plot.list[["VlnPlot_COI_in_ROI"]][[plot]] +
+     ggtitle(title)
+  }
+})
+
+plot.list[["VlnPlot_COI_in_ROI"]] %<>% wrap_plots(ncol = length(.))
+  
+print(plot.list[["VlnPlot_COI_in_ROI"]])
+```
+
+Each cell population spatially
+```{r SpatialPlot of RCTD}
+temp <- lapply(paste0(celltypes_levels), ## RCTD results
+               \(celltype_level) {
+                 celltype <- paste0("RCTD_", celltype_level)
+                 plot <- spatial.seurat %>% SpatialFeaturePlot(
+                   features = celltype,
+                   images = sections,
+                   crop = T,
+                   ncol = 4,
+                   pt.size.factor = 2.5,
+                   stroke = 0,
+                   alpha = 1,
+                   image.alpha = 0.05,
+                   combine = T
+                 ) &
+                   theme(legend.position = "none") & 
+                   scale_alpha_continuous(range = c(0.2, 1)) &
+                   viridis::scale_fill_viridis(option = 'rocket',
+                                               direction = -1,
+                                               limits = c(0, 1)) &
+                   labs(title = NULL)
+                 
+                 plot <-
+                   plot + plot_annotation(title = NULL, subtitle = celltype_level)
+               })
+names(temp) <- paste0("SpatialPlot_", celltypes_levels)
+plot.list %<>% append(values = temp)
+
+print(plot.list$SpatialPlot_OLs)
+```

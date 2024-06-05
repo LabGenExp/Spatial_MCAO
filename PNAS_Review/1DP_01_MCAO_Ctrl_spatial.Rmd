@@ -1,0 +1,421 @@
+---
+title: "MCAO_Ctrl_spatial"
+author: "Daniel Zucha"
+date: "12/20/2022"
+output: html_document
+---
+
+
+Markdown for the analysis of the control section.
+
+Notes on using this script for analysis:
+- This markdown is made for an analysis in a chunk-by-chunk format, knitting will not work. 
+- The structure of this work assumes running an R project in a dedicated folder, e.g. named 'Spatial'. Inside, a structure of few subfolders is needed. One subfolder named 'orig' for the original data that are kept untouched for the entire analysis, only used for loading. Second, a subfolder named 'data' for the input .Rds files and others. Thirdly, a subfolder for named 'results' for the analysis outputs.
+
+I am personally sorry for this inconvenience. A more robust and reproducible pipeline is in the process of making. Thank you for your understanding.
+
+
+Files required to run the script: 
+- original files: "orig/seurat_2ndSpatial.rds", "Metanalysis/ABA regional markers/genes/"
+- intermediate, created files: "data/seurat_ctrl.Rds"
+
+=== Essential chunks, load every time when running the script. ===
+Loading required libraries.
+```{r libraries}
+library(Seurat); library(SeuratWrappers); library(dplyr); library(ggplot2); library(ggthemes); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr)
+```
+
+Miscellaneous. Font, color scheme...
+```{r misc}
+library(showtext); font_add_google(name = "Open Sans", family = "OpenSans"); showtext_auto(); plot.font <- "OpenSans" # custom font for ggplots
+
+## custom color list
+col.list <- list()
+col.list[["ctrl_cols"]] <- c("Isocortex L1-4" = "#EBCC2A", "Isocortex L5" = "#E58601", "Isocortex L6" = "#70ACE0", "GLS" = "#AD5248", "Lateral ventricle"  = "#DD8D29", "Hippocampus" = "#E6A0C4", "Fiber Tracts" = "#6F8E78", "Caudoputamen" = "#F8AFA8", "Thalamus" = "#7294D4", "Hypothalamus" =  "#E1AF00", "Amygdalar nuclei" = "#46ACC8", "Cortical subplate" = "#899DA4", "Piriform area" = "#C27D38")
+```
+
+Creating a subfolder for the results.
+```{r file folder loc}
+if(!dir.exists("results/SpatialFigures/")){dir.create("results/SpatialFigures/")}
+if(!dir.exists("results/SpatialFigures/Figure1")){dir.create("results/SpatialFigures/Figure1"); ws <- "results/SpatialFigures/Figure1"}else{ws <- "results/SpatialFigures/Figure1"}
+```
+
+=== Initial processing and annotation of the control section. ===
+
+Initial processing. Quality filtering, normalization, dimred, clustering, umap, basic plots.
+```{r Control section processing}
+seurat_ctrl <- readRDS(file = "orig/seurat_2ndSpatial.rds")[[1]] #control section
+seurat_ctrl$Condition %<>% factor(., levels = unique(.))
+
+## low quality spot filtering
+seurat_ctrl %<>% subset(subset = nFeature_Spatial > 100) ## spots with >100 unique genes are filtered
+
+## data normalization
+seurat_ctrl <- SCTransform(seurat_ctrl, assay = "Spatial", verbose = TRUE, method = "poisson", return.only.var.genes = F, variable.features.n = NULL, n_genes = NULL) 
+
+## PCA dimensionality reduction
+all.genes <- rownames(seurat_ctrl)
+all.genes.no.mito <- all.genes[grep("mt-", all.genes, ignore.case = T, invert = T)]
+seurat_ctrl <- RunPCA(seurat_ctrl, npcs = 100, verbose = FALSE, features = all.genes.no.mito, reduction.name = "pca") ## mito genes are excluded from clustering
+PCAPlot(seurat_ctrl, reduction = "pca", label = TRUE)
+
+## determining the opt number of PCs
+ElbowPlot(seurat_ctrl, ndims = 100)
+DimHeatmap(seurat_ctrl, dims = 10:30, cells = 500, balanced = TRUE)
+nDims <- 25
+
+## UMAP and clustering
+seurat_ctrl <- RunUMAP(seurat_ctrl, reduction = "pca", dims = 1:nDims, verbose = FALSE, umap.method = 'uwot')
+UMAPPlot(seurat_ctrl, label = TRUE)
+seurat_ctrl <- FindNeighbors(seurat_ctrl, reduction = "pca", dims = 1:nDims, verbose = FALSE)
+seurat_ctrl <- FindClusters(seurat_ctrl, 
+                            resolution = 2, ## set the clustering finesse
+                            algorithm = 1 ## leiden algorithm
+                            ) 
+names(col_vector) <- seurat_ctrl@active.ident %>% levels()
+
+UMAPPlot(seurat_ctrl, label = TRUE, group.by = "SCT_snn_res.1.2") ## UMAP plot at desired resolution
+SpatialPlot(seurat_ctrl, image.alpha = 0.4, label = TRUE, crop = F, label.size = 3, repel = T, combine = T, pt.size.factor = 1.35) ## UMAP clusters in the Spatial plot
+SpatialFeaturePlot(seurat_ctrl, features = "Gpr88", crop = F, pt.size.factor = 1.35) ## specific gene plotting
+VlnPlot(seurat_ctrl, features = c("Glra2", "Grik3", "Tbr1", "Ighm")) ## violin plot for comparative feature plotting
+```
+
+Calculating marker genes and annotating brain regions. The processed section is saved in a new .Rdata file.
+```{r Marker genes and brain region annotation}
+## Region markers
+markers <- FindAllMarkers(seurat_ctrl, ## calculate region markers
+                          only.pos = T, 
+                          logfc.threshold = 0.58) %>% ## fold-change >1.5
+  arrange(desc(avg_log2FC)) %>% 
+  split(f = .[['cluster']]) ## df to list 
+
+write.xlsx(markers, file = file.path(ws,"Markers_Control_SnnClusters12_SuppTab1.xlsx"), overwrite = T) ## save the marker file if necessary
+
+## Region annotation
+## Annotation of the brain regions. References to the Allen Brain Atlas, P56, Coronal, image 65 of 132. 
+seurat_ctrl <- SetIdent(seurat_ctrl, value = "SCT_snn_res.1.2")
+seurat_ctrl <- RenameIdents(seurat_ctrl,
+                                   '1' = "Isocortex L1-4",
+                                   '2' = "Isocortex L6",
+                                   '3' = "Fiber Tracts",
+                                   '4' = "Hypothalamus",
+                                   '5' = "Caudoputamen",
+                                   '6' = "Fiber Tracts",
+                                   '7' = "Amygdalar nuclei",
+                                   '8' = "Thalamus",
+                                   '9' = "Isocortex L5",
+                                   '10' = "GLS",
+                                   '11' = "Cortical subplate",
+                                   '12' = "Thalamus",
+                                   '13' = "Isocortex L5",
+                                   '14' = "Piriform area",
+                                   '15' = "Hypothalamus",
+                                   '16' = "Thalamus", 
+                                   '17' = "Lateral ventricle", 
+                                   '18' = "Hippocampus", 
+                                   '19' = "Cortical subplate"
+)
+seurat_ctrl$BrainRegions <- seurat_ctrl@active.ident
+seurat_ctrl@meta.data[["BrainRegions"]] %<>% factor(., levels = levels(.)[order(levels(.))])
+seurat_ctrl <- SetIdent(seurat_ctrl, value = seurat_ctrl$BrainRegions)
+
+saveRDS(seurat_ctrl, file = "data/seurat_ctrl.Rds")
+```
+
+=== At this point, the control section has undergone basic QC processing, clustering and marker gene calculation. ===
+
+Reading in the preprocessed file.
+```{r read in prepped ctrl section}
+seurat_ctrl <- readRDS(file = "data/seurat_ctrl.Rds")
+```
+
+UMAP visualization.
+```{r UMAP}
+p <- UMAPPlot(seurat_ctrl, group.by = "BrainRegions", cols = col.list[["ctrl_cols"]]); p; p %>% 
+  ggsave(plot = ., filename = paste0(ws, "/UMAPplot_Spatial_Ctrl_BrainRegions_Legend.tiff"), height = 4.5, width = 6, dpi = 300)
+             
+p <- UMAPPlot(seurat_ctrl, group.by = "BrainRegions", cols = col.list[["ctrl_cols"]]) + NoLegend(); p %>% 
+  ggsave(plot = ., filename =  paste0(ws, "/UMAPplot_Spatial_Ctrl_BrainRegions_NoLegend.tiff"), height = 4, width = 4, dpi = 300)
+```
+
+Spatial plot
+```{r UMAP in Spatial plot}
+# a function for a spatial plot
+ctrl_spatial_plot <- function(dataset = seurat_ctrl, group.by = seurat_ctrl@active.ident, images = "sham", label = TRUE){
+  p <- SpatialPlot(seurat_ctrl, 
+                 image.alpha = 0, 
+                 alpha = 0.9,
+                 images = "sham",
+                 label = FALSE, # no labels
+                 cols = col.list[["ctrl_cols"]], 
+                 crop = F, 
+                 label.size = 7, 
+                 repel = T, 
+                 pt.size.factor = 1.4, stroke = 0.1) + theme(
+                   text = element_text(family = "OpenSans", size = 25)
+                 )
+  return(p)
+}
+
+# a function to save the spatial plot in tiff
+ctrl_ggsave <- function(plotname, dpi = 300, height = 6, width = 7){
+  ggsave(filename = paste0(ws, "/", plotname, ".tiff"), 
+         height = 6, 
+         width = 7, 
+         dpi = 300)
+}
+
+# plotting and saving with labels
+ctrl_spatial_plot(label = TRUE)
+ctrl_spatial_plot(label = TRUE) %>% ctrl_ggsave(plotname = "SpatialPlot_Ctrl_BrainRegions_WithLegend")
+  
+# plotting and saving without labels
+ctrl_spatial_plot(label = FALSE)
+ctrl_spatial_plot(label = FALSE) %>% ctrl_ggsave(plotname = "SpatialPlot_Ctrl_BrainRegions_WithoutLegend")
+
+
+seurat_ctrl <- FindClusters(seurat_ctrl, 
+                            resolution = 2, ## high resolution for in-depth transcriptomic detail
+                            algorithm = 1)
+
+ctrl_spatial_plot(group.by = "SCT_snn_res.2", label = TRUE)
+ctrl_spatial_plot(group.by = "SCT_snn_res.2", label = TRUE) %>% 
+  ctrl_ggsave(plotname = "SpatialPlot_Ctrl_BrainRegions_detailed")
+```
+
+Marker heatmap
+```{r DEGs heatmap}
+regions <- levels(seurat_ctrl$BrainRegions)
+seurat_ctrl@active.ident %>% levels
+
+(region %in% (seurat_ctrl@active.ident %>% levels)) %>% isTRUE()
+
+# Markers from the 'SCT' assay
+markers_regions <- FindAllMarkers(seurat_ctrl, only.pos = T, logfc.threshold = 0.58) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01) %>% # filter for signif DEGs
+  split(f = .[["cluster"]]) # separate df for every cluster with all the marker info
+
+markers_regions %>% write.xlsx(file = file.path(ws, "Markers_ControlSection_BrainRegions.xlsx"), overwrite = T)
+
+markers_regions_top100 <- markers_regions %>% lapply(slice_max, order_by = avg_log2FC, n = 100) # order by decreasing avg_log2FC, keeping the top 100 markers
+write.xlsx(markers_regions_top100, file = paste0(ws, "/SuppTable1_Ctrl_RegionMarkers_top100.xlsx"), overwrite = T)
+
+# Selecting the representative markers
+library(pheatmap);library(ggplot2)
+features <- c("Ddit4l", "Rspo1", "Dact2", "Tmem215",  # Isocortex L1-4 markers
+              "Fezf2", "Dkkl1", "Amn", "Plcxd2", # Isocortex L5
+              "Ighm", "Trbc2", "Vxn", "Igsf21", # Isocortex L6
+              "Slc22a6", "Prg4", "Thbd", "Ogn", # GLS
+              "Krt8", "Rarres2", "Col9a3", "Tctex1d4",  # Lateral Ventricle
+              "Cnih2", "Bok", "Cabp7", "Wipf3", # Hippocampus
+              "Sox10", "Gjb1", "Anln", "Fa2h",  # Fiber Tracts
+              "Gpr88", "Ppp1r1b", "Rgs9", "Pde10a", # Caudoputamen
+              "Tcf7l2", "Prkcd", "Zic1", "Gbx2", # Thalamus
+              "Otp", "Trh", "Hcrt", "Sncg", # Hypothalamus
+              "Ngb", "Hap1", "Ucn3", "6330403K07Rik", # Amygdalar nuclei
+              "Cyp26b1", "Syn2", "Lypd1", "Spink8", # Cortical subplate
+              "Trim54", "Ntf3", "Slc30a3", "Tafa2" # Piriform area
+)
+
+## plot the average expression
+dor <- AverageExpression(seurat_ctrl, assays = "SCT", features = features, return.seurat = F, group.by = "BrainRegions", verbose = T); dor <- dor[[1]]; dor <- dor[, c("Isocortex L1-4", "Isocortex L5", "Isocortex L6", "GLS", "Lateral ventricle", "Hippocampus", "Fiber Tracts", "Caudoputamen", "Thalamus", "Hypothalamus", "Amygdalar nuclei", "Cortical subplate", "Piriform area")] # reorder the matrix
+ht <- ggplotify::as.ggplot(pheatmap::pheatmap(dor,
+                                   labels_row = rownames(dor), labels_col = colnames(dor),
+                                   border_color = F, color = col.list[["pal"]], cluster_cols = F, cluster_rows = F, scale = "row", cellheight = 12, cellwidth = 12, fontsize = 12, fontsize_row = 8, main = "Brain Region Markers"));  ht %>% ggsave(filename = paste0(ws, "/Heatmap_Ctrl_BrainRegion_Markers.tiff"), plot = ., device = "tiff", dpi = 300, bg = "white", height = 11, width = 5)
+```
+
+To find the overlap between our brain region annotation and an established, Allen Brain Atlas, we collected their top markers from their in-situ hybridization atlas. 
+```{r Overlap Ours vs ABA markers}
+library(viridis); library(patchwork); library(stringr)
+
+## brain regions
+ABAfiles <- list.files("Metanalysis/ABA regional markers/genes/")
+ABAregions <- ABAfiles  %>% str_replace(pattern = "ABAmarkers_", replacement = "ABA_") %>% str_remove(pattern = ".txt")
+SeuratRegions <- seurat_ctrl$BrainRegions %>% levels()
+
+str_remove(ABAregions, pattern = "ABA_") %in% SeuratRegions # All TRUE? Good work!
+
+ABA.list <- list(); for(i in seq_along(ABAregions)){
+  ABA.list[[ABAregions[i]]] <- scan(file = file.path("Metanalysis/ABA regional markers/genes/", ABAfiles[i]), what = character()) %>% unique %>% head(100) # top100 genes per ABA region
+}
+(names(ABA.list) %>% str_remove(pattern = "ABA_")) %in% SeuratRegions # all True? nice.
+
+## our region markers
+regions <- openxlsx::getSheetNames(file.path(ws, "SuppTable1_Ctrl_RegionMarkers_top100.xlsx")) %>% sort
+regions %in% (seurat_ctrl$BrainRegions %>% levels) # All TRUE? Good!
+markers_regions <- list(); for(i in regions){markers_regions[[i]] <- openxlsx::read.xlsx(file.path(ws, "SuppTable1_Ctrl_RegionMarkers_top100.xlsx"), sheet = i) %>% dplyr::pull(var = "gene")}
+
+
+## overlaps
+total.overlap <- lapply(ABA.list, 
+                        function(y) 
+                          lapply(markers_regions, 
+                                 function(x) (intersect(x, y) %>% length)) %>% unlist()
+                       ) %>% as.data.frame() %>% t() %>% data.frame # data frame of overlaps (rows = ABA, cols = ours)
+rownames(total.overlap) <- ABA.list %>% names
+colnames(total.overlap) <- markers_regions %>% names
+
+## Hypergeometric test of the overlaps (=probability of observing such overlap or more extreme by chance)
+prob <- lapply(total.overlap, 
+                 function(x) 
+                   (phyper(q = x - 1, # white balls drawn (overlap of our genes with their ABA markers)
+                           m = 100, # number of our marker genes (white balls)
+                           n = (18302-100), # number of black balls (background transcriptome - 100 white balls)
+                           k = 100, lower.tail = F) %>% # number of drawn balls (100 = size of ABA marker list)
+                      p.adjust(method = 'fdr', n = 100)) # p-value adjusting
+                 ) %>% data.frame() %>% round(., 3); colnames(prob) <- names(markers_regions)
+prob %<>% mutate(., ABA = rownames(total.overlap)) %>% relocate(., ABA, everything())
+
+## DotPlot for the results
+total.overlap %<>% tibble::rownames_to_column(., var = "ABA")
+library(data.table)
+longprob <- melt(setDT(prob), id.vars = "ABA", value.name = "p-value", variable.factor = F)
+
+long.overlap <- melt(setDT(total.overlap), id.vars = "ABA", value.name = "Overlap", variable.factor = T)
+long.overlap$ABA <- as.factor(long.overlap$ABA)
+long.overlap$`p-value` <- longprob$`p-value`
+long.overlap %<>% arrange(long.overlap, ABA, variable)
+long.overlap <- long.overlap[!(long.overlap$variable %in% c("GLS", "Fiber Tracts", "Lateral ventricle")), ] # remove regions that do not have matched ABA ISH regions
+
+
+## ggplotin' these overlaps
+temp1 <- ggplot(data = long.overlap) + 
+  geom_point(aes(x = variable, y = ABA, size = Overlap, color = `p-value`),  shape = 16) +
+  xlab("This study") +
+  ylab("Allen Brain Atlas") +
+  theme_minimal() +
+  theme(legend.text = element_text(colour = "black"),
+        text = element_text(family = "OpenSans", size = 45),
+        axis.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"), 
+        axis.text.y = element_text(face = "bold"),
+        panel.grid.major = element_line(colour = "#cfcfcf", size = 0.2), 
+        panel.grid.major.x = element_blank(), 
+        panel.background = element_rect(colour = "#cfcfcf", size = 0), legend.position = "right", legend.direction = "vertical") +
+  scale_size_continuous(range = c(0.5,17)) + scale_y_discrete(limits = rev) + 
+  scale_color_viridis(alpha = 0.8, begin = 0.1, end = 0.8, direction = -1, option = "inferno", discrete = F); temp1
+temp1 %>% ggsave(filename = paste0(ws, "/DotPlot_MarkerOverlapForRegions.tiff"), plot = ., device = "tiff", dpi = 300, width = 8, height = 8)
+
+```
+
+
+=== Taking a closer look on the cortex. Subset, dimred, cluster, visualize, markers. ===
+```{r Closer look at the cortex}
+seurat_ctrl <- readRDS(file = "data/seurat_ctrl.Rds")
+seurat_ctx <- seurat_ctrl %>% subset(subset = BrainRegionsShort %in% c('CTX1-4', 'CTX5', 'CTX6'))
+seurat_ctx %<>%  SCTransform(assay = "Spatial", verbose = TRUE, method = "poisson", return.only.var.genes = F, variable.features.n = NULL, n_genes = NULL) 
+
+all.genes.no.mito <- rownames(seurat_ctx) %>% .[grep("mt-", ., ignore.case = T, invert = T)]
+seurat_ctx %<>%  RunPCA(npcs = 100, verbose = FALSE, reduction.name = "pca", features = all.genes.no.mito)
+seurat_ctx %>% PCAPlot(reduction = "pca", label = TRUE)
+
+## determining the opt number of PCs
+seurat_ctx %>% ElbowPlot(ndims = 100)
+DimHeatmap(seurat_ctrl, dims = 10:30, cells = 500, balanced = TRUE)
+
+## UMAP and clustering
+nDims <- 13
+seurat_ctx %<>% RunUMAP(reduction = "pca", dims = 1:nDims, verbose = FALSE, umap.method = 'uwot')
+seurat_ctx %>% UMAPPlot(label = TRUE)
+seurat_ctx %<>% FindNeighbors(reduction = "pca", dims = 1:nDims, verbose = FALSE)
+seurat_ctx %<>% FindClusters(resolution = 1.4, ## set the clustering finess
+                            algorithm = 1) 
+
+seurat_ctx %>% UMAPPlot(label = TRUE)
+seurat_ctx %>% SpatialPlot(label = TRUE, crop = F, image.alpha = 0.25, pt.size.factor = 1.2)
+
+## Markers and layer annotation
+ctx.markers <- seurat_ctx %>% 
+  FindAllMarkers(assay = "SCT", logfc.threshold = 0.5, verbose = T) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  split(f = .[["cluster"]])
+
+## ref genes from ISH ABA
+features <- c("Wfs1", "Calb1", #layer1
+              "Tmem215", "Ddit4l", "Cux2", #layer2-3
+              "Rorb", "Tspan11", #layer4
+              "Etv1", "Pcp4", #layer5
+              "Foxp2", "Ighm" #layer6
+)
+
+seurat_ctx %>% VlnPlot(features = features, assay = "Spatial")
+seurat_ctx %>% SpatialPlot(features = features, label = TRUE, crop = F, image.alpha = 0.25, pt.size.factor = 1.2)
+
+seurat_ctx %<>% RenameIdents('0' = 'Layer6',
+                             '1' = 'Layer5',
+                             '2' = 'Layer2-3',
+                             '3' = 'Layer1',
+                             '4' = 'Layer6',
+                             '5' = 'AnteriorCingulateArea',
+                             '6' = 'Layer4',
+                             '7' = 'Layer4',
+                             '8' = 'Layer5',
+                             '9' = 'Layer4',
+                             '10' = 'Layer5',
+                             '11' = 'Layer6',
+                             '12' = 'CorpusCallosum'); seurat_ctx$layers <- seurat_ctx@active.ident %>% factor(levels = sort(levels(.)))
+
+## Plot the cortex
+seurat_ctx %>% UMAPPlot(label = TRUE)
+(seurat_ctx %>% SpatialPlot(group.by = "layers", crop = F, image.alpha = 0.25, pt.size.factor = 1.2)) + theme(text = element_text(family = "OpenSans", size = 20)) -> p; p
+p %>% ggsave(filename = file.path(ws, "SpatialPlot_Ctrl_CortexLayers.tiff"), device = 'tiff', dpi = 300, width = 5, height = 4)
+
+## marker dotplot
+features_test <- c("Wfs1", "Calb1", #layer1
+              "Tmem215", "Ddit4l", "Cux2", #layer2-3
+              "Rorb", "Tspan11", #layer4
+              "Etv1", "Pcp4", #layer5
+              "Foxp2", "Ighm", #layer6
+              "Plp1", "Mobp" #corpus callosum
+); p <- DotPlot(seurat_ctx, assay = "SCT", features = features_test, group.by = "layers", cols = c("#FFF7FB", "#0868AC")) + 
+  theme(text = element_text(family = "OpenSans", size = 22),
+        axis.text = element_text(size = 25),
+        axis.text.x = element_text(angle = 45, hjust = 1), 
+        axis.ticks = element_blank());p
+p %>% ggsave(filename = paste0(ws, "/DotPlot_CtrlSpatial_layers.tiff"), plot = ., device = 'tiff', dpi = 300, width = 12, height = 8, units = "cm")
+
+saveRDS(seurat_ctx, file = "data/seurat_ctx.Rds")
+```
+
+```{r horizontal vln plots in seurat_ctrl - ABA markers}
+seurat_ctrl <- readRDS(file = "data/seurat_ctrl.Rds")
+features <- c("Ddit4l", "Rspo1", #Isocortex L1-4
+              "Dkkl1", "Plcxd2", # Isocortex L5
+              "Ighm", "Igsf21", # Isocortex L6
+              "Thbd", "Ogn", # GLS
+              "Rarres2", "Col9a3",  # Lateral Ventricle
+              "Cnih2", "Bok", # Hippocampus
+              "Anln", "Fa2h",  # Fiber Tracts
+              "Gpr88", "Ppp1r1b", # Caudoputamen
+              "Tcf7l2", "Prkcd", # Thalamus
+              "Trh", "Sncg", # Hypothalamus
+              "Ngb", "Hap1", # Amygdalar nuclei
+              "Cyp26b1", "Lypd1", # Cortical subplate
+              "Slc30a3", "Tafa2" # Piriform area
+              )
+
+seurat_ctrl$BrainRegions <- factor(seurat_ctrl$BrainRegions, levels = c("Isocortex L1-4", "Isocortex L5", "Isocortex L6", "GLS", "Lateral ventricle", "Hippocampus", "Fiber Tracts", "Caudoputamen", "Thalamus", "Hypothalamus", "Amygdalar nuclei", "Cortical subplate", "Piriform area") %>% rev)
+
+a <- seurat_ctrl$BrainRegions %>% as.character()
+df1 <- data.frame("BrainRegions" = levels(seurat_ctrl$BrainRegions) %>% as.character(), "BrainRegionsShort" = c("PIR", "CS", "AN", "HY", "TH", "CP", "FT", "HIP", "LV", "GLS", "CTX6", "CTX5", "CTX1-4"))
+a[a %in% df1$BrainRegions] <- df1$BrainRegionsShort[match(a, df1$BrainRegions)]; a <- factor(x = a, levels = c("PIR", "CS", "AN", "HY", "TH", "CP", "FT", "HIP", "LV", "GLS", "CTX6", "CTX5", "CTX1-4")); seurat_ctrl$BrainRegionsShort <- a #exchange the long BrainRegions names for shortcuts
+
+## Vln plots themselves
+col.list[["ctrl_cols_short"]] <- col.list[["ctrl_cols"]]; names(col.list[["ctrl_cols_short"]]) <- df1$BrainRegionsShort[match(names(col.list[["ctrl_cols"]]), table = df1$BrainRegions)]
+showtext::showtext_auto()
+(VlnPlot(seurat_ctrl, features = features, group.by = "BrainRegionsShort", ncol = 4, pt.size = 0, cols = col.list[["ctrl_cols_short"]], flip = F) & 
+    coord_flip() & scale_y_continuous(breaks = scales::breaks_pretty(3)) & xlab("") &
+    theme(axis.text.x = element_text(angle = 0, size = 9, hjust = 0.5), text = element_text(family = "OpenSans", size = 16), legend.text = element_text(family = "OpenSans"))
+    ) %>% ggsave(filename = file.path(ws, "VlnPlots_BrainRegion_Markers.tiff"), plot = ., device = "tiff", dpi = 200, width = 7, height = 30)
+
+
+# adding spatial feature plot for lateral ventricle
+(SpatialPlot(seurat_ctrl, 
+               features = c("Rarres2", "Col9a3"), 
+               crop = T, 
+               pt.size.factor = 1.8,
+               alpha = c(0.2, 0.9),
+               image.alpha = 0.6, 
+               slot = 'scale.data') & viridis::scale_fill_viridis(option = "F", direction = -1)) %>% ggsave(filename = file.path(ws, "SpatialFeaturePlot_LateralVentricle_Markers.tiff"), plot = ., device = "tiff", dpi = 300, width = 12, height = 10)
+```

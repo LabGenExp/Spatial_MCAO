@@ -1,0 +1,2018 @@
+---
+title: "MCAO_Deconvolutions"
+author: "Daniel Zucha"
+date: "2023-06-04"
+output: html_document
+---
+
+Markdown for the deconvolution analysis of the spatial transcriptomics dataset. Contains the preparation of the reference dataset from Milich et al. (2021) for the reference-based deconvolution (RCTD), as well as the reference-free deconvolution approach (STdeconvolve).
+
+Essential input files:
+  - Milich et al reference dataset: for processing from scratch, download the inputs from their GEO (GSE162610). To use the re-analyzed dataset by us, download "Milich2021_Batch2_seurat_sct_RedDim.Rds" from our Mendeley data repository. For the milich data, create a subfolder named 'Milich_2021' in the 'data' folder.
+  - STdeconvolve: "STdeconvolve_ResultsList_chosenKs.Rds", "STdeconvolve_markers.zip" (the topic markers)
+  - spatial: seurat_spatial_integrated_ready.Rds
+  - metadata gene lists: gene lists from selected publications (available as Supp. table 4)
+
+
+=== Essential chunks. Always load. ===
+
+```{r libraries}
+library(Seurat); library(tidyverse); library(ggplot2); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr); library(stringr); library(gridExtra); library(Matrix); library(patchwork)
+
+# sourcing custom functions and color palettes
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+# ws
+if(!dir.exists("ws/deconvolution")){dir.create("ws/deconvolution")
+  ws <- "ws/deconvolution"}else{ws <- "ws/deconvolution"}
+
+milich.source <- "data/Metadata/Milich2021/"
+
+# lists
+plot.list <- list()
+result.list <- list()
+```
+
+=== Ref-based deconvolution: Milich et al, 2021 ===
+
+Reading in the GEO-downloaded files.
+```{r read in the GEO files}
+CountMatrix <- Matrix::readMM(file = paste0(milich.source, "GSE162610_RAW/GSE162610_sci_mat.mtx")) #milich metadata are already in the sparse matrix format
+SampleMetadata <- readr::read_tsv(file = paste0(milich.source, "GSE162610_RAW/GSE162610_barcode_metadata.tsv"), col_names = T)
+GenesMetadata <- readr::read_tsv(file = paste0(milich.source, "GSE162610_RAW/GSE162610_genes.tsv"), col_names = F)
+
+CountMatrix %>% dim()
+colnames(CountMatrix) <- SampleMetadata$Cell.ID
+rownames(CountMatrix) <- GenesMetadata$X1
+
+SampleMetadata %<>% column_to_rownames(., var = "Cell.ID")
+```
+
+Seurat object creation
+```{r Seurat object prep}
+seurat_orig <- CreateSeuratObject(CountMatrix, 
+                             project = "Milich2021", 
+                             min.cells = 3, min.features = 200, ##QC filtering
+                             meta.data = SampleMetadata, 
+                             row.names = GenesMetadata)
+seurat_orig[["percent.mt"]] <- PercentageFeatureSet(seurat_orig, pattern = "mt-")
+seurat_orig[["percent.rib"]] <- PercentageFeatureSet(seurat_orig, pattern = "Rpl|Rps")
+
+seurat_orig <- SetIdent(object = seurat_orig, value = "celltype")
+seurat_orig$batch <- str_sub(seurat_orig$sample_id, start = -1) %>% factor(., levels = unique(.))
+```
+
+Quick QC check
+```{r Milich: batch 1+3 too heterogenous, batch2 ok}
+library(dittoSeq)
+{
+  seurat_orig %>% VlnPlot(features = "nCount_RNA", group.by = "celltype", split.by = "batch") -> p1
+  seurat_orig %>% VlnPlot(features = "nFeature_RNA", group.by = "celltype", split.by = "batch") -> p2
+  seurat_orig %>% dittoBarPlot(var = "batch", group.by = "celltype", scale = "count") -> p3
+  seurat_orig %>% dittoBarPlot(var = "batch", group.by = "celltype", scale = "percent" ) -> p4
+  gridExtra::grid.arrange(p1, p2, p3, p4, ncol = 2)
+}; rm(p1, p2, p3, p4); gc()
+```
+
+Milich Seurat object. Batch 2 only.
+```{r seurat batch2 object prep}
+seurat_batch2 <- seurat_orig[, seurat_orig$batch == "2"] # choose batch2 cells only
+saveRDS(seurat_batch2, file = paste0(milich.source, "Milich2021_Batch2_seurat.Rds"))
+```
+
+Processing the Milich seurat
+```{r Process the seurat}
+seurat <- readRDS(file = paste0(milich.source, "Milich2021_batch2_seurat.Rds"))
+
+seurat %<>% SCTransform(assay = "RNA", verbose = TRUE, method = "poisson", return.only.var.genes = F, variable.features.n = NULL, n_genes = NULL)
+seurat %<>% SetIdent(value = "celltype")
+
+all.genes <- rownames(seurat)
+all.genes.no.mito <- all.genes[grep("mt-", all.genes, ignore.case = T, invert = T)]
+seurat <- RunPCA(seurat, npcs = 100, verbose = FALSE, features = all.genes.no.mito, reduction.name = "pca") # mito genes are excluded from clustering
+PCAPlot(seurat, reduction = "pca", label = TRUE)
+
+ElbowPlot(seurat, ndims = 100)
+DimHeatmap(seurat, dims = 20:40, cells = 500, balanced = TRUE)
+
+nDims <- 30
+seurat %<>% RunUMAP(reduction = "pca", dims = 1:nDims, verbose = FALSE, umap.method = 'umap-learn')
+UMAPPlot(seurat, label = TRUE)
+seurat %<>% FindNeighbors(reduction = "pca", dims = 1:nDims, verbose = FALSE)
+seurat %<>% FindClusters(resolution = 0.8, verbose = FALSE, algorithm = 4)
+
+## milich annotation
+UMAPPlot(seurat, group.by = "celltype", pt.size = 1.2, label = T)
+
+## our annotation
+UMAPPlot(seurat, group.by = "FineCelltypes", pt.size = 1.2, label = T, cols = col.list[['milich.cols']])
+
+## cell cycle
+UMAPPlot(seurat, group.by = "Phase", pt.size = 1.2, label = T)
+
+
+## final touches
+seurat$FineCelltypes %<>% stringr::str_replace_all(c('Microglia_Chemotactic' = 'Microglia Chemotactic', 
+                                                            'Microglia_Homeo' = 'Microglia Homeostatic',
+                                                            'Microglia_Proliferating' = 'Microglia Proliferative',
+                                                            'Microglia_Reactive' = 'Microglia Reactive',
+                                                            "Mural_cells" = "Mural cells",
+                                                            'Tcells' = 'T cells'))
+
+seurat$FineCelltypes %<>% factor(levels = c('Astrocytes', 'Ependymal', 'Oligodendrocytes', 'OPCs', 'Endothelial', 'Mural cells', 'Fibroblasts', 'Microglia Homeostatic', 'Microglia Chemotactic', 'Microglia Proliferative', 'Microglia Reactive', 'Neurons', 'T cells', 'Neutrophils', 'Dendritic', 'Monocytes', 'Macrophages'))
+
+saveRDS(seurat, file = paste0(milich.source, "Milich2021_Batch2_seurat_sct_RedDim.Rds"))
+```
+
+```{r Basic stats}
+seurat <- readRDS(file = paste0(milich.source, "Milich2021_Batch2_seurat_sct_RedDim.Rds")); seurat %<>% SetIdent(value = "FineCelltypes")
+
+metadata <- c(
+  "nCount_RNA", ## UMI count
+  "nFeature_RNA", ## unique genes
+  "percent.mt", ## mt RNA content
+  "percent.rib" ## ribosomal rna content
+)
+
+lapply(metadata, function(x){
+  p1 <- seurat %>% FeaturePlot(features = metadata, pt.size = 1.3, label = T, cols = RColorBrewer::brewer.pal(n = 9, name = "Reds"), max.cutoff = 'q99')
+  p2 <- seurat %>% VlnPlot(features = metadata, pt.size = 0.05, cols = col.list[["milich.cols"]]) & NoLegend()
+  gridExtra::grid.arrange(p1, p2)
+}); rm(p1, p2); gc()
+```
+
+```{r Milich Markers}
+seurat <- readRDS(file = paste0(milich.source, "Milich2021_Batch2_seurat_sct_RedDim.Rds"))
+seurat %<>% SetIdent(value = "FineCelltypes")
+
+markers <- FindAllMarkers(seurat, min.pct = 0.15, logfc.threshold = 0.58, only.pos = TRUE, verbose = TRUE, assay = "SCT") %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  split(f = .[["cluster"]])
+
+## adding a column on marker's median expression for the population
+markers2 <- lapply(names(markers), function(pop){
+  temppos <- seurat$FineCelltypes == pop
+  temp <- seurat@assays$RNA@counts[, temppos] %>% apply(MARGIN = 1, FUN = median)
+  tempgenes <- markers[[pop]][["gene"]]
+  temp %<>% .[names(temp) %in% tempgenes] %>% .[match(tempgenes, table = names(.))]
+  markers[[pop]] %<>% dplyr::mutate("MedianPopulationUMI" = temp) 
+  return(markers[[pop]])
+}); names(markers2) <- names(markers)
+
+# save the markers files
+write.xlsx(markers2, file = paste0(ws, "/ClusterMarkers_Milich2021_batch2_sct.xlsx"))
+
+# Dotplot
+features_test <- c('Slc1a3', 'Aqp4', 'Aldh1l1', 'Gfap',   # astrocyte
+                   'Ccdc153', 'Foxj1',    # Ependymal
+                   'Plp1', 'Mbp', 'Cldn11',    # Oligodendrocytes
+                   'Pdgfra', 'Cspg4', 'Vcan',    # OPCs
+                   'Cldn5', 'Flt1',     # Endothelial
+                   'Kcnj8', 'Vtn',     # Mural cells 
+                   'Col1a1', 'Col3a1',     # Fibroblasts
+                   'Hexb', 'Csf1r', 'Cx3cr1', 'P2ry12', 'Siglech',   # MG homeo
+                   'Ccl12', 'Ccl7',     # MG chemotactic
+                   'Ube2c', 'Cenpa',     # MG prolif
+                   'Igf1', 'Spp1', 'C1qa','Apoe', 'Trem2', "Abca1", 'Apoc1',  # MG reac
+                   'Meg3','Rbfox3', 'Gad1',    # Neurons
+                   'Nkg7', 'Trbc2',     # T cells
+                   'S100a8', 'S100a9',     # Neutrophils
+                   'Cd74',     # Dendritic
+                   'Plac8', 'Ly6c2',     # Monocytes
+                   'Gpnmb', 'Wfdc17'     # macrophages
+                   )
+
+DotPlot(seurat, assay = "SCT", features = features_test, group.by = "FineCelltypes", cols = c("#FFF7FB", "#0868AC")) + 
+  theme(text = element_text(family = "OpenSans", size = 20), 
+        axis.text.y = element_text(size = 33), 
+        axis.text.x = element_text(size = 30, angle = 45, vjust = 1, hjust = 1), 
+        axis.ticks = element_blank(), 
+        axis.title = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "cm")) -> p ;p
+p %>% ggsave(filename = paste0(ws, "/DotPlot_Milich_AllCelltypes.tiff"), plot = ., device = 'tiff', dpi = 300, width = 28, height = 9, units = "cm")
+```
+
+Preparing the deconvolution
+```{r read in the Seurats}
+milich.seurat <- readRDS(file = paste0(milich.source, "Milich2021_Batch2_seurat_sct_RedDim.Rds"))
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds"); DefaultAssay(spatial.seurat) <- "SCT"
+```
+
+Reference
+```{r Reference}
+library(spacexr)
+counts <- milich.seurat[["RNA"]]@counts
+meta_data <- data.frame("Barcodes" = Cells(milich.seurat),
+                        "Cluster" = milich.seurat$FineCelltypes, # Re-annotated Milich clusters
+                        "nUMI" = colSums(counts))
+cell_types <- meta_data$Cluster %>% as.factor(); names(cell_types) <- meta_data$Barcodes # create assign barcode names to the individual reference cells
+nUMI <- meta_data$nUMI; names(nUMI) <- meta_data$Barcodes # create named nUMI list
+
+### Create the Reference object
+reference <- Reference(counts, cell_types, nUMI)
+
+## Examine reference object (optional)
+print(dim(reference@counts)) #observe Gene Expression matrix
+table(reference@cell_types) #number of occurences for each cell type
+```
+
+Spatial data
+```{r Spatial data prep}
+## individual sections are provided separetely
+sections <- c("sham", "D1", "D3", "D7")
+counts <- list(); coords <- list(); nUMI.spatial <- list(); for(i in sections){
+  counts[[i]] <- spatial.seurat[["Spatial"]]@counts[, spatial.seurat$Condition %in% i] # RNA counts per replicate
+  coords[[i]] <- data.frame("SpatialBarcodes" = Cells(spatial.seurat)[spatial.seurat$Condition %in% i], #coordinates
+                            "xcoord" = spatial.seurat@images[[i]]@coordinates$imagecol, 
+                            "ycoord" = spatial.seurat@images[[i]]@coordinates$imagerow)
+  rownames(coords[[i]]) <- coords[[i]]$SpatialBarcodes; coords[[i]]$SpatialBarcodes <- NULL   # spot barcodes to rownames
+  nUMI.spatial[[i]] <- colSums(counts[[i]])
+}
+```
+
+```{r SpatialRNA objects}
+puck <- list(); for(i in sections){
+  puck[[i]] <- SpatialRNA(coords[[i]], counts[[i]], nUMI.spatial[[i]])
+}
+```
+
+RCTD object and deconvolution
+```{r RCTD object and deconvo}
+# prepare RCTD object
+puck %>% str # individual spatialRNA objects inside puck list
+sections ## names for the replicates to be analyzed
+
+# Separate RCTD for sections (easier downstream analysis)
+rm(spatial.seurat, milich.seurat, nUMI.spatial, nUMI, counts, coords); gc()
+myRCTD.list <- list()
+for(replicate in sections){
+  myRCTD.list[[replicate]] <- create.RCTD(spatialRNA = puck[[replicate]], 
+                                          reference = reference)
+  }
+
+milich.finecelltypes <- reference@cell_types %>% levels; gc() ## create deconvo-ready files
+
+for(i in sections){
+  myRCTD.list[[i]] <- run.RCTD(myRCTD.list[[i]], 
+                               doublet_mode = "multi")}  ## deconvo itself
+
+# save the output
+save(myRCTD.list, sections, milich.finecelltypes, file = "data/myRCTDlist_RefMilich2021_FineCelltypes_multimode.Rdata")
+saveRDS(myRCTD.list, file = "data/myRCTDlist_RefMilich2021_FineCelltypes_multimode.Rds")
+```
+
+RCTD results.
+
+Loading in the results
+```{r load and add the RCTD results to the spatial seurat}
+{
+  load(file = "data/myRCTDlist_RefMilich2021_FineCelltypes_multimode.Rdata")
+  spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds")
+  spatial.seurat %<>% SetIdent(value = "DetailedRegionAnnoShort")
+}
+
+subweight.list <- list()
+for(i in names(myRCTD.list)){
+  len <- myRCTD.list[[i]]@results %>% length
+  subweight.list[[i]] <- lapply(1:len, function(ii){
+    myRCTD.list[[i]]@results[[ii]][["sub_weights"]]
+    })
+  names(subweight.list[[i]]) <- myRCTD.list[[i]]@spatialRNA@coords %>% rownames()
+}; subweight.list <- purrr::flatten(subweight.list) # barcode-named list of doubles with deconvo proportions
+
+temp <- lapply(milich.finecelltypes, function(x){
+  var <- which(sapply(subweight.list, function(y){x %in% names(y)})) # which spots include given cell type
+  barcodes <- sapply(subweight.list[var], function(z){vals <- z[x]}) # barcode of the spot with cell type, extract celltype's value from that spot
+  names(barcodes) <- names(barcodes) %>% stringr::str_remove(pattern = paste(".", x, sep = "")) # remove the '.celltypename' from barcode names
+  notbarcodes <-  Cells(spatial.seurat)[!(Cells(spatial.seurat) %in% names(barcodes))] # barcodes for spots that do not contain given cell type
+  zeros <- rep(0, length(notbarcodes)); names(zeros) <- notbarcodes # zero vector of notbarcodes length
+  fullbarcodes <- c(barcodes, zeros) 
+  return(fullbarcodes)  
+}); names(temp) <- milich.finecelltypes #%>% stringr::str_remove(pattern = " ")
+
+for(name in names(temp)){ # add the proportions to the spatial.seurat file
+  spatial.seurat %<>% AddMetaData(temp[[name]], col.name = paste0("RCTD_", name)) # add deconvoluted values as metadata to the seurat object
+}; rm(name, i, len)
+
+# save the output
+saveRDS(spatial.seurat, file = "data/SpatialSeurat_afterRCTD.Rds")
+```
+
+Celltype composition of the UMAP clusters
+```{r UMAP cluster cell type composition}
+myRCTD.list[["D1"]]@cell_type_info[["info"]][[2]] ## vector of celltypes included in RCTD deconvo
+
+coi <- names(spatial.seurat[[]])[stringr::str_detect(spatial.seurat[[]] %>% names, pattern = "^RCTD_")] %>% sort ## retrieve rctd celltypes
+coi
+roi <- c("CTX1-4", "CTX5", "CTX6", "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p") ## regions of interest
+milich.col <-  col.list$milich.cols
+
+## Violin plots
+lapply(coi, function(rctdcell){
+  p <- VlnPlot(spatial.seurat, features = rctdcell, idents = roi, pt.size = 0, group.by = "DetailedRegionAnnoShort", cols = col.list[["cols_mono_short"]], ncol = 1, flip = F) & 
+    scale_y_continuous(breaks = scales::breaks_pretty(n = 5)) & 
+    xlab("") & 
+    ylim(0,1) & 
+    labs(title = stringr::str_remove(rctdcell, pattern = "RCTD_")) & 
+    theme(text = element_text(family = "OpenSans", size = 20), 
+          axis.text.x = element_text(angle = 60, hjust = 0.85, vjust = 0.8, size = 20), 
+          axis.text.y = element_text(size = 20), 
+          legend.text = element_text(family = "OpenSans"), 
+          legend.position = "none", 
+          plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm"))
+  print(p)
+  #p %>% ggsave(filename = paste0(ws, "/VlnPlot_UMAPcluster_CellComposition_", rctdcell, ".tiff"), device = "tiff", dpi = 250, width = 7, height = 5)
+})
+
+## RidgePlots
+RidgePlot(spatial.seurat, cols = col.list$cols_mono_short, features = coi, idents = roi)
+
+## Barplots
+propdf <- lapply(roi, function(clusters){
+  rctdprop.mat <- spatial.seurat[[coi]] %>% as.matrix
+  barcodes <- WhichCells(spatial.seurat, idents = clusters)
+  temp <- rctdprop.mat[rownames(rctdprop.mat) %in% barcodes,]  ## subset for the individual cluster
+  temp <- temp[!(rowSums(temp) == 0),] ## keeping non-zero spots
+  tempmean <- temp %>% colSums() %>% '/'(nrow(temp)) %>% '*'(100) ## mean topic value per cluster
+  names(tempmean) %<>% stringr::str_remove(pattern = "RCTD_")
+  names(tempmean) %<>% stringr::str_replace_all(c('Microglia_Chemotactic' = 'Microglia Chemotactic', 
+                                                            'Microglia_Homeo' = 'Microglia Homeostatic',
+                                                            'Microglia_Proliferating' = 'Microglia Dividing',
+                                                            'Microglia_Reactive' = 'Microglia Reactive',
+                                                            'Muralcells' = 'Mural cells',
+                                                            'Tcells' = 'T cells'))
+  #tempmean <- tempmean[match(names(milich.col), names(tempmean))]
+  return(tempmean)
+}); names(propdf) <- roi; 
+propdf[["ISD1p"]] %>% sum; propdf <- propdf %>% bind_rows(.id = "Clusters") %>% tidyr::pivot_longer(cols = 2:ncol(.), names_to = "Celltypes", values_to = "Proportions"); propdf$Clusters %<>% factor(levels = propdf$Clusters %>% unique %>% rev); propdf$Celltypes %<>% stringr::str_replace_all(c("Microglia Dividing" = "Microglia Proliferating", "Mural_cells" = "Mural cells")) %>% factor(levels = names(milich.col)) ## long df with ordered factor levels
+
+(ggplot(data = propdf, aes(fill = Celltypes, y = Proportions, x = Clusters)) + 
+  geom_bar(position = "stack", stat = "identity", width = 0.7, colour = "black", alpha = 0.75) + 
+  scale_fill_manual(values = milich.col, labels = propdf$Celltypes %>% unique) + 
+  scale_y_continuous(breaks = seq(0,100,10)) +
+  scale_x_discrete(labels = c("Cortical layers 1 to 4", "Cortical layer 5", "Cortical layer 6", "Lesion center Day 1", "Lesion periphery Day 1", "Lesion center Day 3", "Lesion periphery Day 3", "Lesion center Day 7", "Lesion periphery Day 7") %>% rev) +
+  coord_flip() +
+  guides(shape = guide_legend(override.aes = list(shape = 19))) +
+  theme(text = element_text(family = "OpenSans", size = 40), 
+        legend.position = "right" , 
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 40),
+        axis.ticks = element_blank(),
+        panel.background = element_rect(fill='white'), #transparent panel bg
+        plot.background = element_rect(fill='white'), #transparent plot bg
+        panel.grid.major.x = element_line(colour = "#A1A19C", size = 0.2)) +  
+        xlab("") + ylab("Deconvoluted cell-type proportions [%]")) %>% ggsave(filename = file.path(ws, "BarplotStacked_CelltypeProportionsInClusters.tiff"), device = "tiff", dpi = 300, width = 11, height = 7)
+```
+
+Spot piecharts
+```{r Plotting RCTD results as Spatial Pie charts}
+library(STdeconvolve)
+
+sections ### run to see the condition names
+condition <- 'D7b'; dir.create(file.path(ws, "RCTD_PieCharts"))
+barcodes <- temp[[1]] %>% names
+weight.df <- sapply(names(temp), function(celltype){
+  (names(temp[[celltype]]) %in% barcodes) %>% all(. == T) %>% print ##check if all barcode names are present
+  match <- match(x = barcodes, table = names(temp[[celltype]]))
+  ord.temp <- temp[[celltype]][match]
+})#; weight.df %<>% normalize_weights()
+cond.names <- spatial.seurat@assays$Spatial %>% colnames %>% .[spatial.seurat$Condition == condition]
+weight.df.cond <- weight.df[cond.names, ]
+if(((weight.df.cond %>% colSums()) != 0) %>% all(. = TRUE)){ ##checking if all celltypes are in the section
+  print("All celltypes are used, all palette colors are used.")
+  to.keep <- colnames(weight.df.cond)[((weight.df.cond %>% colSums()) != 0)]
+}else{
+  (paste("Exclude these celltypes from color palette: ", colnames(weight.df.cond)[((weight.df.cond %>% colSums()) == 0)])) %>% print
+  to.keep <- colnames(weight.df.cond)[((weight.df.cond %>% colSums()) != 0)]
+}
+groups <- spatial.seurat$DetailedRegionAnnoShort[match(x = rownames(weight.df.cond), table = spatial.seurat %>% Cells)] %>% .[!is.na(.)]
+group_cols <- col.list[["cols_mono_short"]][groups] %>% .[!is.na(.)]
+pos <- (myRCTD.list[[condition]]@spatialRNA@coords); pos[['y']] %<>% "*"(-1) ## adjusting positional coordinates for section orientation
+
+#weight.df <- do.call(rbind.data.frame, temp); rownames(weight.df) <- names(temp); colnames(weight.df) <- temp[[1]] %>% names ## merging the list of results into a single df across conditions
+rctd.cols <- c(
+  'Astrocytes' = "#02818A",
+  'Dendritic' = "#FDAE6B",
+  'Endothelial' = "#ed8b03",
+  'Ependymal' = "#016C59",
+  'Fibroblasts' = "#BDBDBD",
+  'Macrophages' = "#F16913",
+  'Microglia_Chemotactic' = "#CB181D",
+  'Microglia_Homeostatic' = '#EF3B2C',
+  'Microglia_Proliferating' = "#A50F15",
+  'Microglia_Reactive' = "#67000D",
+  'Monocytes' = "#FD8D3C",
+  'Mural cells' = "#c67503",
+  'Neurons' = '#5ca6d2',
+  'Neutrophils' = "#FDD0A2",
+  'Oligodendrocytes' = "#8C96C6",
+  'OPCs' = "#BFD3E6",
+  'Tcells' = "#FEE6CE"
+); rctd.cols %<>% .[names(.) %in% to.keep] ## subset for celltypes that are being plotted
+
+
+p <-  vizAllTopics(theta = weight.df.cond, 
+             pos = pos,
+             topicOrder = weight.df.cond %>% colnames %>% sort(), 
+             groups = groups, group_cols = group_cols, lwd = 0.15, plotTitle = condition,
+             topicCols = rctd.cols, showLegend = T, r = 60); p
+p %>% ggsave(filename = paste0(ws, "/RCTD_SpatialPlot_PieCharts_", condition, ".tiff"), device = 'tiff', dpi = 300, width = 8, height = 8); gc()
+```
+
+```{r plotting the RCTD results in Spatial plots}
+# Ploting the cell types
+rctdmeta <- paste("RCTD_", names(temp), sep = ""); rctdmeta[rctdmeta %in% "RCTD_Mural cells"] <- "RCTD_Mural.cells"
+
+## celltype + violin
+lapply(sort(rctdmeta), function(celltype){
+  pairs <- lapply(c('sham', 'D1', 'D3', 'D7'), function(time){
+    p1 <- SpatialPlot(spatial.seurat, features = celltype, images = time, crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.25, stroke = 0.05, alpha = c(0.5, 1)) & viridis::scale_fill_viridis(option = 'rocket', direction = -1, limits = c(0,1), end = 0.95) & labs(fill = celltype) & NoLegend() &
+      theme(text = element_text(family = "OpenSans", size = 16), axis.text = element_text(family = 'OpenSans', size = 10), 
+            plot.margin = unit(c(0,0,0,0), "cm"), 
+            plot.background = element_blank(), 
+            panel.background = element_blank())
+    
+    p2 <- VlnPlot(subset(spatial.seurat, subset = Condition == time), features = celltype, pt.size = 0, group.by = "DetailedRegionAnnoShort", cols = col.list[["cols_mono_short"]], ncol = 1) & coord_flip() & scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) & xlab("") & labs(title = "") & ylim(c(0,1)) &
+    theme(axis.text.x = element_text(family = 'OpenSans', angle = 30, size = 5, hjust = 0.7, vjust = 0.8), 
+          axis.text.y = element_text(family = 'OpenSans', size = 10),
+          text = element_text(family = "OpenSans", size = 25), 
+          legend.position = "none", 
+          plot.margin = unit(c(0, 0.3, 0.3, 0), "cm"),
+          plot.background = element_blank(), 
+          panel.background = element_blank())
+    p <- grid.arrange(p1, p2, ncol = 2, widths = c(1,0.5)) 
+  })
+  gridExtra::grid.arrange(grobs = pairs, ncol = 4) #%>% ggsave(filename = paste0(ws, "/FeaturePlot_VlnPlot_", celltype, ".tiff"), device = 'tiff', dpi = 300, bg = NULL, width = 20, height = 4)
+})
+
+```
+
+```{r Looking at T cells}
+## spots that contain T cells
+
+spot_composition <- function(input_list = subweight.list, celltype = "Tcells"){
+  sapply(input_list, function(y) celltype %in% names(y)) %>% 
+    which -> order
+  paste0("I have found: ", length(order), " spots containing the cell type of interest: ", celltype) %>% print
+  selected_spots <- input_list %>% .[order]
+  selected_spots %<>% unlist
+  spot_names <- names(selected_spots)
+  names(selected_spots) <- names(selected_spots) %>% str_remove_all(pattern = "^[^.]*\\.*")
+  barcodes <- spot_names %>% str_remove_all(pattern = "\\.(.*)")
+  
+  return_list <- list(
+    "Selected spots" = selected_spots,
+    "Barcodes" = barcodes
+  )
+  return(return_list)
+}
+
+Tcellspots <- spot_composition(celltype = "Tcells")
+Tcellspots %>% names %>% table
+
+
+
+```
+
+
+=== Ref-based deconvolution: RCTD using Zeng 2023 ref ===
+Next, we will use the annotated reference dataset for a deconvolution of in-house generated spatial data.
+
+```{r load libraries and datasets}
+library(spacexr)
+
+# single-cell reference
+seurat <- readRDS(file = "data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds")
+
+# spatial seurat
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds")
+DefaultAssay(spatial.seurat) <- "Spatial"
+```
+
+Single-cell reference object prep
+```{r Reference}
+# counts and metadata information
+counts <- seurat[["RNA"]]$counts
+meta_data <- data.frame("Barcodes" = Cells(seurat),
+                        "Cluster" = seurat$CellTypeClass, # annotated celltypes
+                        "nUMI" = colSums(counts))
+cell_types <- meta_data$Cluster %>% as.factor(); names(cell_types) <- meta_data$Barcodes # assign barcode names to the individual reference cells
+nUMI <- meta_data$nUMI; names(nUMI) <- meta_data$Barcodes # create named nUMI list
+
+### Create the Reference object
+reference <- Reference(counts, cell_types, nUMI, min_UMI = 300)
+
+## (optional) Examine reference object
+print(dim(reference@counts)) #observe Gene Expression matrix
+table(reference@cell_types) #number of occurences for each cell type
+```
+
+Spatial object prep
+```{r Spatial data prep}
+spatial.seurat@meta.data %>% glimpse
+spatial.seurat@meta.data$Sample %>% table
+sections <- c("Ctrl", "1DPI", "3DPI", "7DPI")
+
+spatial.seurat %>% SpatialPlot(
+  group.by = "DetailedRegionAnnoShort", 
+  cols = col.list$cols_mono_short, 
+  images = sections,
+  image.alpha = 0, 
+  stroke = 0, 
+  crop = F) & NoLegend()
+
+## individual sections are provided separately
+counts <- list()
+coords <- list()
+nUMI.spatial <- list()
+for(i in sections){
+  counts[[i]] <- spatial.seurat[["Spatial"]]@counts[, spatial.seurat$Condition %in% i] # RNA counts per replicate
+  coords[[i]] <- data.frame("SpatialBarcodes" = Cells(spatial.seurat)[spatial.seurat$Condition %in% i], #coordinates
+                            "xcoord" = spatial.seurat@images[[i]]@coordinates$imagecol, 
+                            "ycoord" = spatial.seurat@images[[i]]@coordinates$imagerow)
+  rownames(coords[[i]]) <- coords[[i]]$SpatialBarcodes; coords[[i]]$SpatialBarcodes <- NULL   # spot barcodes to rownames
+  nUMI.spatial[[i]] <- colSums(counts[[i]])
+}
+
+# Spatial RNA objects
+puck <- list()
+for(i in sections){
+  puck[[i]] <- SpatialRNA(coords[[i]], counts[[i]], nUMI.spatial[[i]])
+}
+```
+
+(Optional) Moving to a background job by running '0F_04_MCAO_RCTD_deconvolution_background.R'
+```{r optional moving to a background job}
+save(reference, puck, sections, file = file.path("data", "1DP_04_MCAO_rctd_zeng2023_background.Rdata"))
+```
+
+Run RCTD deconvolution
+```{r RCTD object and deconvo}
+# prepare RCTD object
+puck %>% glimpse # individual spatialRNA objects inside puck list
+sections ## names for the replicates to be analyzed
+
+# Separate RCTD for sections (easier downstream analysis)
+rm(nUMI.spatial, nUMI, counts, coords)
+gc()
+myRCTD.list <- list()
+for(replicate in sections){
+  myRCTD.list[[replicate]] <- create.RCTD(spatialRNA = puck[[replicate]], 
+                                          reference = reference, max_cores = 32)
+  }
+
+celltypes_levels <- reference@cell_types %>% levels
+gc() ## create deconvo-ready files
+
+for(i in sections){
+  myRCTD.list[[i]] <- run.RCTD(myRCTD.list[[i]], 
+                               doublet_mode = "full")}  ## deconvo itself; mode = "full" as we expect multiple cell types present in each spot.
+
+# save the output
+save(myRCTD.list, sections, celltypes_levels, file = "data/RCTDlist_scRefZeng2023_fullmode.Rdata")
+saveRDS(myRCTD.list, file = "data/RCTDlist_scRefZeng2023_fullmode.Rds")
+```
+
+(optional) load rctd results
+```{r load rctd results}
+# load(file = "data/RCTDlist_scRefZeng2023_fullmode.Rdata")
+```
+
+Add RCTD results to the spatial object
+```{r add RCTD to spatial}
+if(myRCTD.list[[1]]@config$RCTDmode == "multi"){ # processing multi-mode results
+  cat(crayon::yellow("Adding RCTD multi mode results.", "\n"))
+  subweight.list <- list()
+  for(i in names(myRCTD.list)){
+    len <- myRCTD.list[[i]]@results %>% length
+    subweight.list[[i]] <- lapply(1:len, function(ii){
+      myRCTD.list[[i]]@results[[ii]][["sub_weights"]]
+      })
+    names(subweight.list[[i]]) <- myRCTD.list[[i]]@spatialRNA@coords %>% rownames()
+  }; subweight.list <- purrr::flatten(subweight.list) # barcode-named list of doubles with deconvo proportions
+  
+  temp <- lapply(celltypes_levels, function(x){
+    var <- which(sapply(subweight.list, function(y){x %in% names(y)})) # which spots include given cell type
+    barcodes <- sapply(subweight.list[var], function(z){vals <- z[x]}) # barcode of the spot with cell type, extract celltype's value from that spot
+    names(barcodes) <- names(barcodes) %>% stringr::str_remove(pattern = paste(".", x, sep = "")) # remove the '.celltypename' from barcode names
+    notbarcodes <-  Cells(spatial.seurat)[!(Cells(spatial.seurat) %in% names(barcodes))] # barcodes for spots that do not contain given cell type
+    zeros <- rep(0, length(notbarcodes)); names(zeros) <- notbarcodes # zero vector of notbarcodes length
+    fullbarcodes <- c(barcodes, zeros) 
+    return(fullbarcodes)  
+  }); names(temp) <- celltypes_levels
+  
+  for(name in names(temp)){ # add the proportions to the spatial.seurat file
+    spatial.seurat %<>% AddMetaData(temp[[name]], col.name = paste0("RCTD_Celltypes_", name)) # add deconvoluted values as metadata to the seurat object
+  }
+  
+  rm(name, i, len)
+  
+} else if(myRCTD.list[[1]]@config$RCTDmode == "full"){
+  cat(crayon::yellow("Adding RCTD full mode results.", "\n"))
+  result.list[["full_weightlist"]] <- lapply(myRCTD.list, function(i){
+    norm_weights <- i@results$weights %>% normalize_weights() %>% as.data.frame()
+    return(norm_weights)
+  }) %>% bind_rows()
+  
+  # reorder the weightlist by spatial seurat barcodes
+  result.list[["full_weightlist"]] %<>% slice(match(rownames(result.list[["full_weightlist"]]), spatial.seurat %>% Cells))
+  rctd_colnames <- paste0("RCTD_", colnames(result.list[["full_weightlist"]]))
+  spatial.seurat %<>% AddMetaData(
+    metadata = result.list[["full_weightlist"]], 
+    col.name = rctd_colnames
+    )
+  
+  # created missing values replace by zero
+  spatial.seurat@meta.data[rctd_colnames][is.na(spatial.seurat@meta.data[rctd_colnames])] <- 0
+} else {
+  cat(crayon::yellow("Adding RCTD double mode results is not supported.", "\nCodebase is missing.", "\n"))
+}
+```
+
+save spatial with RCTD data
+```{r save spatial after deconvo}
+saveRDS(spatial.seurat, file = file.path("data", "seurat_spatial_integrated_ready_rctdZeng2023.rds"))
+```
+
+```{r RCTD SpatialPlot}
+# Spatial plots, rocket color gradient for all
+temp <- lapply(
+  paste0(celltypes_levels), ## RCTD results
+  function(celltype_level){
+    celltype <- paste0("RCTD_", celltype_level)
+    plot <- spatial.seurat %>% SpatialFeaturePlot(
+      features = celltype, 
+      images = sections, 
+      crop = F, 
+      ncol = 4, 
+      pt.size.factor = 1.5,
+      stroke = 0, 
+      alpha = 1, 
+      image.alpha = 0, 
+      combine = T
+    ) & 
+      theme(legend.position = "none") &
+      viridis::scale_fill_viridis(
+        option = 'rocket', 
+        direction = -1, 
+        limits = c(0,1)) & 
+      labs(title = NULL)
+    
+    plot <- plot + plot_annotation(title = NULL, subtitle = celltype_level)
+  }
+)
+names(temp) <- paste0("SpatialPlot_", celltypes_levels)
+plot.list %<>% append(values = temp)
+
+print(plot.list$SpatialPlot_VSMCs)
+```
+
+```{r Subset for cortex-only spatial.seurat}
+## create a subset spatial seurat for roi
+isch.spots <- spatial.seurat@meta.data %>% filter(DetailedRegionAnnoShort %in% roi) %>% rownames
+ctx.spatial.seurat <- subset(spatial.seurat, cells = isch.spots)
+
+ctx.spatial.seurat %>% SpatialPlot(
+  features = "RCTD_Astrocytes", 
+  images = sections, 
+  alpha = 1, 
+  image.alpha = 0.1, 
+  crop = F, 
+  stroke = 0, 
+  combine = T, 
+  ncol = 4
+  ) & 
+  theme(legend.position = "none") &
+  viridis::scale_fill_viridis(
+    option = 'rocket', 
+    direction = -1, 
+    limits = c(0,1)) & 
+  labs(title = NULL)
+```
+
+```{r RCTD Stacked barplot}
+# celltypes of interest
+coi <- spatial.seurat@meta.data %>% colnames %>% stringr::str_subset(pattern = "^RCTD_")
+
+# regions of interest - affected by stroke
+Idents(spatial.seurat) <- "DetailedRegionAnnoShort"
+roi <- c("CTX1-4", "CTX5", "CTX6", "ISD1c", "ISD1p", "ISD3c", "ISD3p", "ISD7c", "ISD7p")
+
+# df of celltypes of interest (coi) in the regions of interest (roi)
+df <- spatial.seurat@meta.data %>% filter(
+   DetailedRegionAnnoShort %in% roi 
+  ) %>% select(
+    DetailedRegionAnnoShort, coi
+  )
+
+# table of mean coi per roi
+mean_table <- df %>% 
+  group_by(DetailedRegionAnnoShort) %>% 
+  summarize(across(starts_with("RCTD_"), \(x) mean(x, na.rm = TRUE)), .groups = "drop")
+
+# Stacked bar plot
+{
+  long_data <- mean_table %>% 
+    pivot_longer(
+      cols = starts_with("RCTD_"), 
+      names_to = "CellType", 
+      values_to = "MeanValue"
+    ) %>% mutate(CellType = stringr::str_remove(CellType, "RCTD_"))
+  
+  # Create the plot
+  stacked_bar_plot <- ggplot(long_data, aes(x = DetailedRegionAnnoShort, y = MeanValue, fill = CellType)) +
+    geom_bar(stat = "identity", alpha = 0.9) + # Stacked bar plot
+    scale_fill_manual(values = col.list$zeng.cols) +
+    labs(
+      x = NULL,
+      y = "Average Spot Composition",
+      fill = "Cell Type"
+    ) + theme_mk + remove_grid
+
+  # Display the plot
+  print(stacked_bar_plot)
+}
+```
+
+```{r RCTD Violin plot}
+spatial.seurat %>% enh_vlnplot(
+  feature = c("RCTD_Neurons", "RCTD_Astrocytes", "RCTD_Microglia", "RCTD_OLs", "RCTD_OPCs", "RCTD_PeripheralMyeloidCells"), 
+  grouping = "DetailedRegionAnnoShort", 
+  colors = col.list$cols_mono_short, 
+  compare_means = F, idents = roi
+  ) & NoLegend()
+```
+
+How are the cell populations related to enriched biological processes?
+```{r load GO results}
+result.list[["Enrichments"]] <- readRDS(file = file.path("ws", "Metascape_GO_parent_terms.Rds"))
+```
+
+Compute Module scores for the GO summary parent terms
+```{r GO summaries as module scores}
+# get the gene lists of GO summary parent terms
+result.list[["GOsummaries"]] <- list()
+for (i in result.list[["Enrichments"]][["Process_Description"]]) {
+  # select the gene symbols of every process
+  temp <-  result.list[["Enrichments"]] %>%
+    filter(Process_Description %in% i) %>%
+    pull(Symbols) %>%
+    strsplit(",")
+  
+  # append the results
+  result.list[["GOsummaries"]] %<>% append(temp)
+}
+names(result.list[["GOsummaries"]]) <-
+  result.list[["Enrichments"]] %>% pull(Process_Description)
+
+# turn the GO summaries into module scores.
+spatial.seurat %<>% AddModuleScore(features = result.list[["GOsummaries"]],
+                                   name = names(result.list[["GOsummaries"]]),
+                                   assay = "SCT")
+
+# remove environmental variables
+rm(i, temp)
+```
+
+Correlate the GO Module scores with RCTD
+```{r cor rctd with go parents}
+rctd_df <- spatial.seurat@meta.data %>% 
+  filter(BrainAreas %in% "Lesion") %>% 
+  select(starts_with("RCTD_"))
+
+go_df <- spatial.seurat@meta.data %>% 
+  filter(BrainAreas %in% "Lesion") %>% 
+  select(contains("DPI_"))
+
+all(rownames(rctd_df) == rownames(go_df))
+
+calculate_correlations <- \(df1, df2, ...) {
+  
+  cor_mat <- matrix(nrow = ncol(df2), ncol = ncol(df1))
+  colnames(cor_mat) <- colnames(df1)
+  rownames(cor_mat) <- colnames(df2)
+  
+  for(col1 in colnames(df1)) {
+    for(col2 in colnames(df2)){
+      cor_mat[col2, col1] <- cor(df1[[col1]], df2[[col2]], ...)
+    }
+  }
+  
+  # adjust for multiple hypothesis testing
+  cor_mat %<>% p.adjust(method = "fdr")
+  
+  return(cor_mat)
+}
+
+result.list[["Cor_rctd_vs_go_parents"]] <- calculate_correlations(rctd_df, go_df, method = "spearman")
+
+# convert the matrix to long format
+cor_df <- result.list[["Cor_rctd_vs_go_parents"]] %>% as.table %>% as.data.frame()
+colnames(cor_df) <- c("go_parent", "celltype", "correlation")
+
+# plot the heatmap
+cor_df %>% ggplot(aes(x = celltype, y = go_parent, fill = correlation)) + 
+  geom_tile(color = "white") + 
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1, 1), 
+                       space = "Lab", name = "Correlation") + 
+  theme_mk + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+```
+
+Top correlated processes for each celltype
+```{r top cor processes with celltypes}
+temp <- cor_df %>% 
+  group_by(celltype) %>% 
+  arrange(desc(correlation)) %>% 
+  slice_head(n = 5) %>% 
+  ungroup
+
+cor_value <- spatial.seurat@meta.data %>% 
+  filter(BrainAreas %in% "Lesion") %>% 
+  select(RCTD_OPCs, `7DPI_Gliogenesis53`) %>% 
+  summarise(cor = cor(RCTD_OPCs, `7DPI_Gliogenesis53`)) %>%
+  pull(cor)
+
+
+spatial.seurat@meta.data %>%
+  filter(BrainAreas %in% "Lesion") %>% 
+  select(c(
+    "BrainAreas", 
+    "Condition", 
+    "RCTD_OLs", 
+    "RCTD_Astrocytes", 
+    "RCTD_OPCs", 
+    "RCTD_Microglia", 
+    "7DPI_Gliogenesis53")) %>% 
+  ggplot(aes(x = .data[["RCTD_OPCs"]], y = .data[["7DPI_Gliogenesis53"]], color = .data[["BrainAreas"]])) +
+  geom_point() + 
+  scale_color_manual(values = col.list$BrainAreas) +
+  theme_mk + 
+  remove_grid
+
+
+spatial.seurat %>% FeatureScatter(
+  feature1 = "RCTD_OLs", 
+  feature2 = '7DPI_Gliogenesis53', 
+  group.by = "BrainAreas",
+  shuffle = T, 
+  pt.size = 1.5, 
+  cols = col.list$BrainAreas, 
+  smooth = F, 
+  plot.cor = T
+)
+
+
+
+```
+
+=== Ref-based deconvolution: C-SIDE using Zeng 2023 ref ===
+Oligodendrocytes are primary constituents of the deep white matter tracts. However, with the time progression the lesion was surrounded by OLs and OPCs. The question here is, how are these OLs located near the lesion different from those in deep white matter tracts? Using C-Side, we aim to describe the difference by running location- and celltype-specific differential gene expression. 
+
+
+```{r cside list}
+# a list to store the cside results
+cside.list <- list()
+```
+
+Compare oligodendrocytes in the lesion and fiber tracts
+```{r C-Side for oligodendrocytes}
+spatial.seurat %>% enh_vlnplot(
+  feature = "RCTD_Astrocytes", 
+  grouping = "DetailedRegionAnnoShort", 
+  colors = col.list$cols_mono_short, 
+  compare_means = F, 
+  idents = c("FT", "ISD1c", "ISD1p", "ISD3c", "ISD3p",  "ISD7c", "ISD7p")
+  ) + NoLegend()
+
+# Define the timepoint and prep the myRCTD results for C-SIDE
+timepoint <- "D7"
+myRCTD.list[[timepoint]]@config$doublet_mode = myRCTD.list[[timepoint]]@config$RCTDmode
+
+# Define spots of interest
+region.list <- list(
+  "Lesion" = Cells(spatial.seurat)[spatial.seurat$DetailedRegionAnnoShort %in% c("ISD7p") & spatial.seurat$Condition == timepoint],
+  "FiberTracts" = Cells(spatial.seurat)[spatial.seurat$DetailedRegionAnnoShort %in% c("FT") & spatial.seurat$Condition == timepoint]
+) 
+
+{
+  # Regions of interest turned into explanatory variable
+  roi <- rep(0, length(region.list %>% unlist)) 
+  names(roi) <- region.list %>% unlist # names as in spots
+  roi[region.list[["Lesion"]]] <- 1 # Lesion spots get a 1
+}
+
+# Run C-Side for Oligodendrocytes
+cside.list[["CSIDE_D7_OLs_FTvsLesion"]] <- run.CSIDE.single(
+  myRCTD = myRCTD.list[[timepoint]], 
+  explanatory.variable = roi,
+  cell_types = "OLs", # celltypes of interest
+  cell_type_threshold = 50,
+  weight_threshold = 0.5,
+  doublet_mode = F ## doublet-mode was 'full'
+  )
+```
+
+Astrocytes too appeared to envelop the lesioned area on day 7. How do they differ from their cortex-resident counterparts?
+```{r C-Side for astrocytes}
+Idents(spatial.seurat) <- "Condition"
+
+spatial.seurat %>% enh_vlnplot(
+  feature = "RCTD_Astrocytes", 
+  grouping = "BrainAreas", 
+  colors = col.list$BrainAreas, 
+  compare_means = F, 
+  idents = "D7"
+  ) + NoLegend()
+
+
+# Define the timepoint and prep the myRCTD results for C-SIDE
+timepoint <- "D7"
+myRCTD.list[[timepoint]]@config$doublet_mode = myRCTD.list[[timepoint]]@config$RCTDmode
+
+# Define spots of interest
+region.list <- list(
+  "Lesion" = Cells(spatial.seurat)[spatial.seurat$BrainAreas %in% c("Lesion") & spatial.seurat$Condition == timepoint],
+  "Intact" = Cells(spatial.seurat)[spatial.seurat$BrainAreas %in% c("Cortex") & spatial.seurat$Condition == timepoint]
+) 
+
+{
+  # Regions of interest turned into explanatory variable
+  roi <- rep(0, length(region.list %>% unlist)) 
+  names(roi) <- region.list %>% unlist # names as in spots
+  roi[region.list[["Lesion"]]] <- 1 # Lesion spots get a 1
+}
+
+# Run C-side for astrocytes
+cside.list[["CSIDE_D7_Astrocytes_CortexvsLesion"]] <- run.CSIDE.single(
+  myRCTD = myRCTD.list[[timepoint]], 
+  explanatory.variable = roi,
+  cell_types = "Astrocytes", # celltypes of interest
+  cell_type_threshold = 25,
+  weight_threshold = 0.15,
+  doublet_mode = F ## doublet-mode was 'full'
+  )
+```
+
+
+```{r C-Side for Microglia}
+Idents(spatial.seurat) <- "Condition"
+
+spatial.seurat %>% enh_vlnplot(
+  feature = "RCTD_Microglia", 
+  grouping = "BrainAreas", 
+  colors = col.list$BrainAreas, 
+  compare_means = F, 
+  idents = "D7"
+  ) + NoLegend()
+
+# Define the timepoint and prep the myRCTD results for C-SIDE
+timepoint <- "D7"
+myRCTD.list[[timepoint]]@config$doublet_mode = myRCTD.list[[timepoint]]@config$RCTDmode
+
+# Define spots of interest
+region.list <- list(
+  "Lesion" = Cells(spatial.seurat)[spatial.seurat$BrainAreas %in% c("Lesion") & spatial.seurat$Condition == timepoint],
+  "Intact" = Cells(spatial.seurat)[spatial.seurat$BrainAreas %in% c("Cortex") & spatial.seurat$Condition == timepoint]
+) 
+
+{
+  # Regions of interest turned into explanatory variable
+  roi <- rep(0, length(region.list %>% unlist)) 
+  names(roi) <- region.list %>% unlist # names as in spots
+  roi[region.list[["Lesion"]]] <- 1 # Lesion spots get a 1
+}
+
+
+# Run C-Side for Microglia
+cside.list[["CSIDE_D7_Microglia_CortexvsLesion"]] <- run.CSIDE.single(
+  myRCTD = myRCTD.list[[timepoint]], 
+  explanatory.variable = roi,
+  cell_types = "Microglia", # celltypes of interest
+  cell_type_threshold = 25,
+  weight_threshold = 0.15,
+  doublet_mode = F ## doublet-mode was 'full'
+  )
+```
+
+save c-side results
+```{r save cside results}
+save(cside.list, file = file.path("data", "CSIDElist_scRefZeng2023_fullmode.Rdata"))
+```
+
+```{r Explore C-Side results}
+cside.res <- myRCTD.list[["CSIDE_D7_OLs_FTvsLesion"]]@de_results$sig_gene_list$OLs
+
+cside.res %>% arrange(desc(log_fc)) %>% head(10)
+
+spatial.seurat %>% SpatialPlot(
+  features = "Serpina3n", 
+  slot = "data",
+  crop = F, 
+  images = sections, 
+  pt.size = 1.5, 
+  stroke = 0, 
+  alpha = 1, 
+  image.alpha = 0
+  ) & 
+  theme(legend.position = "none") &
+  viridis::scale_fill_viridis(
+    option = 'rocket', 
+    direction = -1) & 
+  labs(title = NULL)
+
+seurat %>% FeaturePlot(
+  features = "Tnfrsfa", label = T, reduction = "umap_harmony", slot = "data"
+)
+
+```
+
+
+=== STdeconvolve ===
+
+Input file prep.
+```{r input file prep}
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds"); DefaultAssay(spatial.seurat) <- "SCT"; conds <- c("D1", "D3", "D7", "sham")
+subset.list <- SplitObject(spatial.seurat, split.by = "Condition")
+
+library(STdeconvolve)
+deconvo.prepfile <- lapply(conds, function(x){
+  pos <- subset.list[[x]]@images[[x]]@coordinates[c("row", "col")]; colnames(pos) <- c("x", "y") ## x and y positions of each pixel
+  cd <- subset.list[[x]]@assays$Spatial@counts ## matrix of gene counts in each pixel
+  annot <- subset.list[[x]]$DetailedRegionAnnoShort ## annotated tissue layers assigned to each pixel
+  return(list("pos" = pos, "cd" = cd, "annot" = annot))
+}); names(deconvo.prepfile) <- conds
+deconvo.results <- list()
+```
+
+Perform STdeconvo.
+
+```{r Ctrl deconvo}
+section <- "sham"
+mcao.section <- deconvo.prepfile[[section]]
+counts <- cleanCounts(mcao.section$cd, min.lib.size = 100, min.reads = 10, min.detected = 1, verbose = T) ## feature selection for the most likely relevant genes
+
+(Matrix::colSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Features per spot")
+(Matrix::rowSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Datasets per gene")
+
+## feature select for genes
+corpus <- restrictCorpus(counts, removeAbove = 0.95, removeBelow = 0.05, nTopOD = 3000, alpha = 0.05, plot = TRUE, verbose = TRUE) ## nTopOD actually 1937 genes
+ldas <- fitLDA(t(as.matrix(corpus)), Ks = seq(15, 30, by = 1), ## Ks = how many cell types are to be expected
+               perc.rare.thresh = 0.05, ncores = 6, plot=TRUE, verbose=TRUE) ## from this, one shall choose the most optimal model based on its K value (expected number of cell types). Optimal scenarios include the model with minimal perplexity, or computing a 'knee' metric (inflection point).
+#save(ldas, file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_ctrl.Rdata"))
+#load(file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_ctrl.Rdata")) # ldas with K15-30 for Ctrl section
+```
+
+```{r D1 deconvo}
+section <- "D1"
+mcao.section <- deconvo.prepfile[[section]]
+counts <- cleanCounts(mcao.section$cd, min.lib.size = 100, min.reads = 10, min.detected = 1, verbose = T) ## feature selection for the most likely relevant genes
+
+(Matrix::colSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Features per spot"); (Matrix::rowSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Datasets per gene")
+
+## feature select for genes
+corpus <- restrictCorpus(counts, removeAbove = 0.95, removeBelow = 0.025, alpha = 0.05, nTopOD = 3000, plot = TRUE, verbose = TRUE); gc() ##nTopOD actually 1958 genes
+ldas <- fitLDA(t(as.matrix(corpus)), Ks = seq(15, 30, by = 1),
+               perc.rare.thresh = 0.05, ncores = 6, plot=TRUE, verbose=TRUE) 
+#save(ldas, file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_D1.Rdata"))
+load(file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_D1.Rdata")) # load ldas with K15-30 for D1
+```
+
+```{r D3 deconvo}
+section <- "D3"
+mcao.section <- deconvo.prepfile[[section]]
+counts <- cleanCounts(mcao.section$cd, min.lib.size = 100, min.reads = 10, min.detected = 1, verbose = T) ## feature selection for the most likely relevant genes
+
+(Matrix::colSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Features per spot")
+(Matrix::rowSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Datasets per gene")
+
+## feature select for genes
+corpus <- restrictCorpus(counts, removeAbove = 0.95, removeBelow = 0.025, alpha = 0.05, nTopOD = 3000, plot = TRUE, verbose = TRUE) ## nTopOD actually 2299 genes
+ldas <- fitLDA(t(as.matrix(corpus)), Ks = seq(15, 30, by = 1),
+               perc.rare.thresh = 0.05, ncores = 6, plot=TRUE, verbose=TRUE)
+save(ldas, file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_D3.Rdata"))
+#load(file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_D3.Rdata"))
+```
+
+```{r D7 deconvo}
+section <- "D7"
+mcao.section <- deconvo.prepfile[[section]]
+counts <- cleanCounts(mcao.section$cd, min.lib.size = 100, min.reads = 10, min.detected = 1, verbose = T) ## feature selection for the most likely relevant genes
+
+(Matrix::colSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Features per spot"); (Matrix::rowSums(counts)+1) %>% log10 %>% hist(breaks = 100, main = "Datasets per gene")
+
+## feature select for genes
+corpus <- restrictCorpus(counts, removeAbove = 0.95, removeBelow = 0.025, alpha = 0.05, nTopOD = 3000, plot = TRUE, verbose = TRUE); gc() ## nTopOD actually 2090 genes
+ldas <- fitLDA(t(as.matrix(corpus)), Ks = seq(15, 30, by = 1),
+               perc.rare.thresh = 0.05, ncores = 6, plot=TRUE, verbose=TRUE) 
+save(ldas, file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_D7.Rdata"))
+#load(file = paste0("data/STdeconvolve_ldasK15_30_allTopODgenes_D7.Rdata")) ## loads the ldas object of D7
+```
+
+```{r Spatial Plots with STdeconvolve results}
+df <- data.frame("Ks" = ldas$models %>% names %>% as.integer, "Perp" = ldas$perplexities, "RareCells" = ldas$numRare, "Ratio" = (ldas$numRare/(ldas$models %>% names %>% as.integer))) %>% round(2); df
+K.topics <- 21 ## optimal cluster count; Ctrl = 23; 1DPI = 24; 3DPI = 24; 7DPI = 21
+optLDA <- optimalModel(models = ldas, opt = K.topics) # "min" = K that resulted in minimum perplexity, "kneed" = inflection point, or put up a number
+results <- getBetaTheta(lda = optLDA, perc.filt = 0.05, ## celltypes of <5 % are discarded
+                        betaScale = 1000 ## scaling the transcriptional profiles
+                        ); deconvo.results[[section]] <- results
+deconProp <- deconvo.results[[section]]$theta; deconGexp <- deconvo.results[[section]]$beta
+
+## markers ####
+markerlist <- lapply(deconProp %>% colnames, function(celltype){
+  celltype <- as.numeric(celltype)
+  highgexp <- names(which(deconGexp[celltype,] > 3)) # select for the highly expressed genes
+  log2fc <- sort(log2(deconGexp[celltype,highgexp]/colMeans(deconGexp[-celltype,highgexp])), decreasing=TRUE) #log fold change
+  top.markers <- names(log2fc)[1:3] ## label the top 3 genes
+  bottom.markers <- names(log2fc) %>% tail(1) ## label the last top genes
+  
+  dat <- data.frame(values = as.vector(log2fc), genes = names(log2fc), order = seq(length(log2fc)))
+  dat$selectedLabels <- ""
+  dat$selectedLabels[1:3] <- top.markers
+  dat$selectedLabels[length(dat$selectedLabels)] <- bottom.markers
+  return(dat)
+}); names(markerlist) <- deconProp %>% colnames; 
+openxlsx::write.xlsx(markerlist, file = paste0(ws, "/STdeconvolve_", section, "_K", K.topics, "_allTopODgenes.xlsx"), overwrite = F)
+marker.plots <- lapply(deconProp %>% colnames %>% as.numeric, function(celltype){
+  dat <- markerlist[[celltype]]
+  log2fc <- dat[["values"]] 
+  plt <- ggplot2::ggplot(data = dat) +
+    ggplot2::geom_col(ggplot2::aes(x = order, y = values,
+                                   fill = factor(selectedLabels == ""),
+                                   color = factor(selectedLabels == "")), width = 1) +
+    
+    ggplot2::scale_fill_manual(values = c("darkblue",
+                                          "darkblue"
+                                          )) +
+    ggplot2::scale_color_manual(values = c("darkblue",
+                                          "darkblue"
+                                          )) +
+    
+    ggplot2::scale_y_continuous(expand = c(0, 0), limits = c(min(log2fc) - 0.3, max(log2fc) + 0.3)) +
+    
+    ggplot2::labs(title = paste0("Topic_", celltype),
+                  x = "Gene expression rank",
+                  y = "log2(FC)") +
+    
+    ## placement of gene symbol labels of top genes
+    ggplot2::geom_text(ggplot2::aes(x = order+1, y = values-0.1, label = selectedLabels), color = "red") +
+    
+    ggplot2::theme_classic() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(size=15, color = "black"),
+                   axis.text.y = ggplot2::element_text(size=15, color = "black"),
+                   axis.title.y = ggplot2::element_text(size=15, color = "black"),
+                   axis.title.x = ggplot2::element_text(size=15, color = "black"),
+                   axis.ticks.x = ggplot2::element_blank(),
+                   plot.title = ggplot2::element_text(size=15),
+                   legend.text = ggplot2::element_text(size = 15, colour = "black"),
+                   legend.title = ggplot2::element_text(size = 15, colour = "black", angle = 90),
+                   panel.background = ggplot2::element_blank(),
+                   plot.background = ggplot2::element_blank(),
+                   panel.grid.major.y = ggplot2::element_line(size = 0.3, colour = "gray80"),
+                   axis.line = ggplot2::element_line(size = 1, colour = "black"),
+                   legend.position="none", 
+                   text = element_text(family = "OpenSans")
+                   )
+  return(plt)
+})
+gridExtra::grid.arrange(grobs = marker.plots, ncol = 4)
+
+## Spatial Plots ####
+vizAllTopics(theta = deconProp, pos = mcao.section$pos, groups = mcao.section$annot, group_cols = col.list$detailed_cols_short, r = 0.4) + scale_y_reverse()
+
+colnames(deconProp) <- paste0("K", K.topics, "_Topic_", colnames(deconProp))
+subset.list[[section]] <- AddMetaData(subset.list[[section]], metadata = deconProp, col.name = deconProp %>% colnames) ## adding the topics to the seurat object
+
+pairs <- lapply(colnames(deconProp), function(topic){
+  p1 <- SpatialPlot(subset.list[[section]], features = topic, images = section, crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, stroke = 0.05, alpha = c(0.5, 1)) & viridis::scale_fill_viridis(option = 'rocket', direction = -1, limits = c(0,1), end = 0.95) & labs(fill = topic) & NoLegend() &
+      theme(text = element_text(family = "OpenSans", size = 16), axis.text = element_text(family = 'OpenSans', size = 10), 
+            plot.margin = unit(c(0,0,0,0), "cm"), 
+            plot.background = element_blank(), 
+            panel.background = element_blank())
+
+  p2 <- VlnPlot(subset.list[[section]], features = topic, pt.size = 0, group.by = "DetailedRegionAnnoShort", cols = col.list[["cols_mono_short"]], ncol = 1) & coord_flip() & scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) & xlab("") & labs(title = "") &
+    theme(axis.text.x = element_text(family = 'OpenSans', angle = 30, size = 5, hjust = 0.7, vjust = 0.8), 
+          axis.text.y = element_text(family = 'OpenSans', size = 10),
+          text = element_text(family = "OpenSans", size = 25), 
+          legend.position = "none", 
+          plot.margin = unit(c(0, 0.3, 0.3, 0), "cm"),
+          plot.background = element_blank(), 
+          panel.background = element_blank())
+    p <- grid.arrange(p1, p2, ncol = 2, widths = c(1,0.5))
+}); gridExtra::grid.arrange(grobs = pairs, ncol = 4) %>% ggsave(filename = paste0(res.path, "/FeaturePlot_VlnPlot_STdeconvolve_", section, ".tiff"), device = 'tiff', dpi = 300, bg = NULL, width = 20, height = 24)
+```
+
+```{r saving the selected Ks}
+names(deconvo.results) <- c("Ctrl_K23", "D1_K24", "D3_K24", "D7_K21")
+saveRDS(deconvo.results, file = "data/STdeconvolve_ResultsList_chosenKs.Rds")
+```
+
+STdeconvolve results.
+
+Load the prerequisities
+```{r load the seurat, results and libraries}
+library(STdeconvolve); library(Hmisc); library(dittoSeq); library(clusterProfiler)
+
+res.path <- "results/SpatialFigures/Figure3/STdeconvolve_chosenKs"
+spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds")
+STdeconv.reslist <- readRDS(file = "data/STdeconvolve_ResultsList_chosenKs.Rds")
+STdeconv.markerlist <- lapply(list.files(res.path) %>% grep(pattern = '_allTopODgenes.xlsx$', value = T), function(x){
+  tabnames <- openxlsx::getSheetNames(file.path(res.path, x))
+  file <- lapply(tabnames, function(y){read.xlsx(file.path(res.path, x), sheet = y)})
+  names(file) <- paste0("Topic_", tabnames)
+  return(file)
+})
+names(STdeconv.markerlist) <- list.files(res.path) %>% grep(pattern = '_allTopODgenes.xlsx$', value = T) %>% stringr::str_remove(pattern = "STdeconvolve_") %>% stringr::str_remove(pattern = "_allTopODgenes.xlsx")
+
+#STdeconv.markerlist.big <- STdeconv.markerlist %>% unlist(recursive = F); STdeconv.markerlist.big %>% write.xlsx(file = file.path(res.path, "STdeconvolve_MCAO_markers.xlsx"), overwrite = T) ## all the topics to one excel file
+``` 
+
+Load the published meta marker lists.
+```{r meta marker sets}
+library("org.Mm.eg.db", character.only = TRUE); library(UpSetR)
+
+# load in the Supp Table 4 with meta gene lists and 
+pub.markers <- read_all_sheets(file = "data/SupplementaryTable4_Metanalysis_GlialReactivityMarkers.xlsx") %>% lapply(., function(sheet){
+  name <- sheet %>% names
+  print(name)
+  temp.tibble <- tibble("Celltype" = rep(name, times = sheet %>% nrow),
+                        "GeneSymbols" = .[[name]][[1]])
+  return(temp.tibble)
+})
+
+pub.markersdf <- plyr::ldply(pub.markers, rbind, .id = NULL) %>% .[grep("^Rp|^mt", x = .[["GeneSymbols"]], ignore.case = F, invert = T),]; pub.markers %>% head
+```
+
+```{r published cell type marker sets in our Spatial}
+## DAA
+feature <- "Habib2020_DAA"
+spatial.seurat %<>% AddModuleScore(features = list(pub.markers[["Astro_DAA_vs_Gfaphigh_Habib2020_up"]][["GeneSymbols"]]), name = feature)
+spatial.seurat[[]] %>% names %>% tail
+
+## DOL
+feature <- "Kenigsbuch2022_DOL"
+spatial.seurat %<>% AddModuleScore(features = list(pub.markers[["Oligodendrocytes_DOLs_Keningsbuch2022"]][["GeneSymbols"]]), name = feature)
+spatial.seurat[[]] %>% names %>% tail
+
+## OPTIONAL: add other meta cell populations to see their spatial pattern.
+
+## plotting
+(SpatialFeaturePlot(spatial.seurat, 
+                    features = paste0(feature, "1"), 
+                    images = c('sham', 'D1', 'D3', 'D7'), 
+                    crop = F, ncol = 1, pt.size.factor = 1.35, image.alpha = 0.3, alpha = c(0.5, 1), combine = T, stroke = 0) & 
+    NoLegend() & 
+    viridis::scale_fill_viridis(option = "F", direction = -1, limits = c(min(spatial.seurat[[paste0(feature, "1")]]), max(spatial.seurat[[paste0(feature, "1")]])), alpha = 1, end = 0.95) &
+    theme(text = element_text(family = "OpenSans", size = 25), 
+          plot.margin = unit(c(0,0,0,0), "cm"))) %>% 
+  ggsave(filename = paste0(ws, "/SpatialFeaturePlot_", stringr::str_sub(feature, end = -1) , ".tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 28, height = 9)
+```
+
+One-by-one look at the topics. Topic composition per UMAP clusters, gene ontology annotation, enrichment for meta populations, marker gene heatmap
+
+```{r D1 - STdeconvolve}
+section <- "D1"; decres <- names(STdeconv.reslist) %>% grep(pattern = section, value = T) ## D1_K24
+toi <- c("Topic_1", "Topic_2", "Topic_11", "Topic_13", "Topic_15", "Topic_22", "Topic_24") ## topics of interest
+toi.markers <- STdeconv.markerlist[[decres]][toi] %>% lapply(FUN = function(df) base::subset(df, values > 0.58) %>% .[["genes"]]) ## markers that are substantially upregulated
+
+deconProp <- STdeconv.reslist[[decres]]$theta; colnames(deconProp) <- paste0("Topic_", colnames(deconProp))
+deconGexp <- STdeconv.reslist[[decres]]$beta; rownames(deconGexp) <- paste0("Topic_", rownames(deconGexp))
+D1spatial <- subset(spatial.seurat, subset = Condition == section)
+D1spatial <- AddMetaData(D1spatial, metadata = deconProp, col.name = deconProp %>% colnames) ## adding the topics to the seurat object
+
+
+## D1 UMAP clusters topic composition
+umap.clusters <- c("ISD1c", "ISD1p")
+proplist <- lapply(umap.clusters, function(umap){
+  quicklist <- list()
+  temp <- deconProp[rownames(deconProp) %in% Cells(subset(D1spatial, subset = DetailedRegionAnnoShort == umap)),] ## subset section-specific deconProp down to spots for UMAP clusters of interest
+  quicklist[["clusterprop"]] <- temp
+  quicklist[["meanprop"]]<- temp %>% colSums() %>% '/'(nrow(temp)) %>% '*'(100) ## mean topic value per cluster
+  return(quicklist)
+}); names(proplist) <- umap.clusters
+
+## Functional annotation - ORA
+library(org.Mm.eg.db)
+ORA.topic <- lapply(toi.markers, function(x) clusterProfiler::enrichGO(gene = x, # list of genes 
+                                                      universe      = rownames(D1spatial@assays$SCT), # 'potential DEGs', as detected genes within the tissue
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = org.Mm.eg.db,
+                                                      ont           = "BP", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% dplyr::arrange(p.adjust) %>% dplyr::filter(p.adjust < 0.01) #%>% clusterProfiler::simplify()
+                    )
+ORA.topic %>% write.xlsx(file = paste0(ws, "/ORAenrichment_GOterms_TopicsOfInterest_", decres, ".xlsx"))
+
+
+## Cell type enrichment
+pub.markers.filt <- pub.markersdf[pub.markersdf$GeneSymbols %in% rownames(D1spatial@assays$SCT), ]
+
+Celltype.enrich <- lapply(toi.markers, function(x) clusterProfiler::enricher(gene = x, 
+                                                                             universe = rownames(D1spatial@assays$SCT), 
+                                                                             TERM2GENE = pub.markers.filt, pAdjustMethod = "fdr", pvalueCutoff = 0.01
+                                                                            ))
+#Celltype.enrich %>% write.xlsx(file = paste0(ws, "/CelltypeEnrichment_TxtCollection_TopicsOfInterest_", decres, ".xlsx"))
+
+
+## Heatmap of marker genes for the topics of interest
+ht.markers <-  toi.markers %>% unlist %>% unique()
+deconGexp %>% rownames() %>% head
+ht.temp <- deconGexp %>% .[rownames(.) %in% toi, ht.markers] %>% t ## smaller matrix of topics that interest me; expression value = probability distribution of cell-type expression, scaled to sum of 1000 across variable genes
+ht <- ggplotify::as.ggplot(pheatmap::pheatmap(ht.temp, 
+                                              labels_row = rownames(ht.temp), labels_col = colnames(ht.temp),
+                                              border_color = F, 
+                                              cluster_rows = F, cluster_cols = F, treeheight_row = 10, treeheight_col = 5,
+                                              scale = "row", 
+                                              cellheight = 3, cellwidth = 10, 
+                                              fontsize_row = 10, fontsize = 15, main = "Day 1 soft clustering")) + theme(text = element_text(family = "OpenSans")); ht
+ht %>% ggsave(filename = paste0(ws, "/Heatmap_STdeconvolve_Markers_", section, ".tiff"), plot = ., device = "tiff", dpi = 300, bg = "white", height = 11, width = 3)
+```
+
+```{r D3 - STdeconvolve}
+section <- "D3"; decres <- names(STdeconv.reslist) %>% grep(pattern = section, value = T) ## D3_K24
+toi <- c("Topic_9", "Topic_10", "Topic_12", "Topic_13", "Topic_22", "Topic_23") ## topics of interest
+toi.markers <- STdeconv.markerlist[[decres]][toi] %>% lapply(FUN = function(df) base::subset(df, values > 0.58) %>% .[["genes"]]) ## markers that are substantially upregulated
+
+deconProp <- STdeconv.reslist[[decres]]$theta; colnames(deconProp) <- paste0("Topic_", colnames(deconProp))
+deconGexp <- STdeconv.reslist[[decres]]$beta; rownames(deconGexp) <- paste0("Topic_", rownames(deconGexp))
+D3spatial <- subset(spatial.seurat, subset = Condition == section)
+D3spatial <- AddMetaData(D3spatial, metadata = deconProp, col.name = deconProp %>% colnames) ## adding the topics to the seurat object
+
+## D3 UMAP clusters topic composition
+umap.clusters <- c("ISD3c", "ISD3p")
+proplist <- lapply(umap.clusters, function(umap){
+  quicklist <- list()
+  temp <- deconProp[rownames(deconProp) %in% Cells(subset(D1spatial, subset = DetailedRegionAnnoShort == umap)),] ## subset section-specific deconProp down to spots for UMAP clusters of interest
+  quicklist[["clusterprop"]] <- temp
+  quicklist[["meanprop"]]<- temp %>% colSums() %>% '/'(nrow(temp)) %>% '*'(100) ## mean topic value per cluster
+  return(quicklist)
+}); names(proplist) <- umap.clusters
+
+## Functional annotation - ORA
+library(org.Mm.eg.db)
+ORA.topic <- lapply(toi.markers, function(x) clusterProfiler::enrichGO(gene = x, # list of genes 
+                                                      universe      = rownames(D3spatial@assays$SCT), # 'potential DEGs', as detected genes within the tissue
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = org.Mm.eg.db,
+                                                      ont           = "BP", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% dplyr::arrange(p.adjust) %>% dplyr::filter(p.adjust < 0.01) #%>% clusterProfiler::simplify()
+                    )
+ORA.topic %>% write.xlsx(file = paste0(ws, "/ORAenrichment_GOterms_TopicsOfInterest_", decres, ".xlsx"))
+
+## Topic 10 looks like DOLs ####
+topic <- 'Topic_10'
+D3spatial[[]] %>% names
+spots.to.plot <- Cells(D3spatial)[!is.na(D3spatial[[topic]])]; D3spatial %<>% subset(cells = spots.to.plot) ##remove cells with topics NA value
+(SpatialPlot(object = D3spatial, features = topic, 
+                          images = section, 
+                          crop = F, 
+                          ncol = 1, 
+                          pt.size.factor = 1.35, 
+                          image.alpha = 0, 
+                          alpha = c(0.4, 1), 
+                          combine = T, 
+                          stroke = 0.05) & 
+  viridis::scale_fill_viridis(option = "rocket", 
+                              direction = -1, 
+                              limits = c(0,1), 
+                              alpha = 1, 
+                              end = 0.99) &
+  theme(text = element_text(size = 25), 
+        plot.margin = unit(c(0,0,0,0), "cm"))
+  ) %>% 
+  ggsave(filename = file.path(res.path, "SpatialFeaturePlot_STdecon_D3_Topic10.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 11)
+
+## topic markers
+topic.lfcmarker.df <- data.frame('Genes' = STdeconv.markerlist[[decres]][[topic]]$genes %>% factor(levels = unique(.)),
+                              'Values' = STdeconv.markerlist[[decres]][[topic]]$values)[1:15,] ##logFC markers
+
+topic.expmarker.df <- data.frame('Genes' = deconGexp[topic, ] %>% sort(decreasing = T) %>% names %>% head(15) %>% factor(levels = unique(.)),
+                              'Values' =  deconGexp[topic, ] %>% sort(decreasing = T) %>% head(15)) ##highest expression markers
+
+data <- list(
+  topic.lfcmarker.df, "logFC"
+  #topic.expmarker.df, "Expression"
+  )
+p <- ggplot(data = data[[1]], aes(x = Genes, y = Values, fill = Genes)) + 
+  geom_bar(stat = "identity", show.legend = F, fill = "#C81951FF", color = "#1B112BFF", size = 0.5, width = 0.8, alpha = 0.9) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 55, colour = 'black', face = "italic"), 
+        axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size = 55, colour = 'black'), 
+        axis.title = element_text(size = 45),
+        text = element_text(family = 'OpenSans')) +
+  ylab(data[[2]]) +
+  xlab("") + ggtitle(""); p; p %>% ggsave(filename = paste0(res.path, "/Barplot_", data[[2]], "_MarkerGenes_", section, "_", topic, ".tiff"), device = 'tiff', dpi = 300,units = 'cm', width = 15, height = 9)
+
+
+## enrichment for published genesets
+meta.list <- list(
+  "Pandey2022_MOL_DA2" = pub.markers[["Pandey2022_MOL_DA2_markers_short"]],
+  "Kenigsbuch2022_DOLs" = pub.markers[["Oligodendrocytes_DOLs_Keningsbuch2022"]],
+  "Habib2020_DAAs" = pub.markers[["Astro_DAA_vs_homeostatic_Habib2020_up"]]
+)
+meta.df <- lapply(meta.list, head, 300) %>% 
+  plyr::ldply(.fun = rbind, .id = NULL) %>% 
+  .[grep("^Rp|^mt", x = .[["GeneSymbols"]], ignore.case = F, invert = T),] %>% 
+  subset(subset = GeneSymbols %in% colnames(deconGexp)) ## keep only genes present in the topic matrix
+
+meta.enrich <- clusterProfiler::GSEA(geneList = deconGexp[topic, ] %>% sort(decreasing = T),
+                                     TERM2GENE = meta.df, pAdjustMethod = 'fdr', pvalueCutoff = 0.1, verbose = F, minGSSize = 5)
+
+genesetID <- c(meta.df$Celltype %>% unique); genesetID
+IDtochoose <- genesetID[1]
+enrichplot::gseaplot(meta.enrich, geneSetID = IDtochoose, 
+                     title = NULL,
+                     by = 'runningScore') + xlab("") + ylab("") + theme_minimal() + 
+  theme(text = element_text(family = 'OpenSans', size = 20),
+                                                  axis.text.x = element_blank(),
+                                                  axis.text.y = element_blank()) -> p; p; p %>% ggsave(filename = paste0(ws, "/GSEAplot_", section, "_", topic, "_", IDtochoose, ".tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 4) ## GSEA enrichment plot
+
+
+
+
+D3spatial %<>%  AddModuleScore(features = list(pub.markers$Oligodendrocytes_DOLs_Keningsbuch2022$GeneSymbols), name = 'DOLs_Kenigsbuch')
+D3spatial %<>%  AddModuleScore(features = list(pub.markers$Astro_reactive_Consensus_Nature2021$GeneSymbols), name = 'NatureCons_ReacAstro')
+D3spatial %<>%  AddModuleScore(features = list(pub.markers$Astro_DAA_vs_homeostatic_Habib2020_up$GeneSymbols), name = 'DAA_Habib')
+
+## comparing the topic with RCTD deconvo, or the published reactive marker sets
+topic.df <- data.frame('Cells' = D3spatial %>% Cells, 
+                       'Topic' = D3spatial$Topic_10,
+                       'Astro' = D3spatial$RCTD_Astrocytes,
+                       'Oligo' = D3spatial$RCTD_Oligodendrocytes,
+                       'Neuron' = D3spatial$RCTD_Neurons,
+                       'Region' = D3spatial$DetailedRegionAnnoShort,
+                       'NatureReac' = D3spatial$NatureCons_ReacAstro1,
+                       'DOLs' = D3spatial$DOLs_Kenigsbuch1,
+                       'DAAs' = D3spatial$DAA_Habib1
+                       ) %>% subset(.[['Topic']] > 0)
+
+cor.test(x = topic.df$Topic, y = topic.df$DAAs)
+p <- ggplot(data = topic.df, aes(x = Topic, y = DAAs)) + geom_point(size = 2, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p; p %>% ggsave(filename = file.path(res.path, "ScatterPlot_Corr_D3_Topic10_vs_MSDAAs.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 9, height = 7)
+
+(SpatialFeaturePlot(D3spatial, features = "DAA_Habib1", images = 'D3',  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 100) %>% rev) &
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))) %>% ggsave(filename = file.path(res.path, "SpatialFeaturePlot_D3_DAAsHabib.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 10, height = 11)
+
+
+cor.test(x = topic.df$Topic, y = topic.df$DOLs)
+p <- ggplot(data = topic.df, aes(x = Topic, y = DOLs)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p ; p %>% ggsave(filename = file.path(res.path, "ScatterPlot_Corr_D3_Topic10_vs_MSDOLs.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 9, height = 7)
+
+
+(SpatialFeaturePlot(D3spatial, features = "DOLs_Kenigsbuch1", images = 'D3',  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 100) %>% rev) &
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))) %>% ggsave(filename = file.path(res.path, "SpatialFeaturePlot_D3_DOLsKenigsbuch.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 10, height = 11)
+
+
+## Topic 12 looks like ARMs ####
+topic <- "Topic_12"
+toi.markers[[topic]]
+D3spatial[[]] %>% names
+(SpatialFeaturePlot(D3spatial, features = topic, images = 'D3',  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & viridis::scale_fill_viridis(option = "rocket", direction = -1, limits = c(0,1), alpha = 1, end = 0.99) &
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))) %>% ggsave(filename = paste0(res.path, "/SpatialFeaturePlot_STdecon_D3_", topic, ".tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 10, height = 11)
+
+
+topic.marker.df <- data.frame('Genes' = STdeconv.markerlist[["D3_K24"]][[topic]]$genes %>% factor(levels = unique(.)),
+                              'Values' = STdeconv.markerlist[["D3_K24"]][[topic]]$values)[1:15,]
+
+p <- ggplot(data = topic.marker.df, aes(x = Genes, y = Values, fill = Genes)) + 
+  geom_bar(stat = "identity", show.legend = F) + 
+  scale_fill_grey() + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, face = 'bold', size = 30, colour = 'black'), axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5), text = element_text(family = 'OpenSans')) +
+  ylab('Value') +
+  xlab("") + ggtitle(""); p; p %>% ggsave(filename = paste0(res.path, "/Barplot_MarkerGenes_", section, "_", topic, ".tiff"), device = 'tiff', dpi = 250,units = 'cm', width = 11, height = 10)
+
+
+## Topic 22 looks like DAAs ####
+topic <- 'Topic_22'
+D3spatial[[]] %>% names
+spots.to.plot <- Cells(D3spatial)[!is.na(D3spatial[[topic]])]; D3spatial %<>% subset(cells = spots.to.plot) ##remove cells with topics NA value
+(SpatialPlot(object = D3spatial, features = topic, 
+                          images = section, 
+                          crop = F, 
+                          ncol = 1, 
+                          pt.size.factor = 1.35, 
+                          image.alpha = 0, 
+                          alpha = c(0.4, 1), 
+                          combine = T, 
+                          stroke = 0.05) & 
+  viridis::scale_fill_viridis(option = "rocket", 
+                              direction = -1, 
+                              limits = c(0,1), 
+                              alpha = 1, 
+                              end = 0.99) &
+  theme(text = element_text(size = 25), 
+        plot.margin = unit(c(0,0,0,0), "cm"))
+  ) %>% 
+  ggsave(filename = file.path(res.path, "SpatialFeaturePlot_STdecon_D3_Topic22.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 11)
+
+## topic markers
+topic.lfcmarker.df <- data.frame('Genes' = STdeconv.markerlist[[decres]][[topic]]$genes %>% factor(levels = unique(.)),
+                              'Values' = STdeconv.markerlist[[decres]][[topic]]$values)[1:15,] ##logFC markers
+
+topic.expmarker.df <- data.frame('Genes' = deconGexp[topic, ] %>% sort(decreasing = T) %>% names %>% head(15) %>% factor(levels = unique(.)),
+                              'Values' =  deconGexp[topic, ] %>% sort(decreasing = T) %>% head(15)) ##highest expression markers
+
+data <- list(
+  topic.lfcmarker.df, "logFC"
+  #topic.expmarker.df, "Expression"
+  )
+p <- ggplot(data = data[[1]], aes(x = Genes, y = Values, fill = Genes)) + 
+  geom_bar(stat = "identity", show.legend = F, fill = "#C81951FF", color = "#1B112BFF", size = 0.5, width = 0.8, alpha = 0.9) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 55, colour = 'black', face = "italic"), 
+        axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size = 55, colour = 'black'), 
+        axis.title = element_text(size = 45),
+        text = element_text(family = 'OpenSans')) +
+  ylab(data[[2]]) +
+  xlab("") + ggtitle(""); p; p %>% ggsave(filename = paste0(res.path, "/Barplot_", data[[2]], "_MarkerGenes_", section, "_", topic, ".tiff"), device = 'tiff', dpi = 300,units = 'cm', width = 15, height = 9)
+
+
+## enrichment for published genesets
+meta.list <- list(
+  "Kenigsbuch2022_DOLs" = pub.markers[["Oligodendrocytes_DOLs_Keningsbuch2022"]],
+  "Habib2020_DAAs" = pub.markers[["Astro_DAA_vs_homeostatic_Habib2020_up"]]
+)
+meta.df <- lapply(meta.list, head, 300) %>% 
+  plyr::ldply(.fun = rbind, .id = NULL) %>% 
+  .[grep("^Rp|^mt", x = .[["GeneSymbols"]], ignore.case = F, invert = T),] %>% 
+  subset(subset = GeneSymbols %in% colnames(deconGexp)) ## keep only genes present in the topic matrix
+
+meta.enrich <- clusterProfiler::GSEA(geneList = deconGexp[topic, ] %>% sort(decreasing = T),
+                                     TERM2GENE = meta.df, pAdjustMethod = 'fdr', pvalueCutoff = 0.1, verbose = F, minGSSize = 5)
+
+genesetID <- c(meta.df$Celltype %>% unique); genesetID
+IDtochoose <- genesetID[3]
+enrichplot::gseaplot(meta.enrich, geneSetID = IDtochoose, 
+                     title = NULL,
+                     by = 'runningScore') + xlab("") + ylab("") + theme_minimal() + 
+  theme(text = element_text(family = 'OpenSans', size = 20),
+                                                  axis.text.x = element_blank(),
+                                                  axis.text.y = element_blank()) -> p; p; p %>% ggsave(filename = paste0(ws, "/GSEAplot_", section, "_", topic, "_", IDtochoose, ".tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 4) ## GSEA enrichment plot
+
+topic.df <- data.frame('Cells' = D3spatial %>% Cells,
+                       'Topic' = D3spatial[[topic]][, 1],
+                       'Astro' = D3spatial$RCTD_Astrocytes,
+                       'Oligo' = D3spatial$RCTD_Oligodendrocytes,
+                       'Neuron' = D3spatial$RCTD_Neurons,
+                       'Region' = D3spatial$DetailedRegionAnnoShort,
+                       'NatureReac' = D3spatial$NatureCons_ReacAstro1,
+                       'DAAHabib' = D3spatial$Habib_DAA1
+                       ) %>% subset(.[['Topic']] != 0)
+
+cor.test(x = topic.df$Topic, y = topic.df$NatureReac)
+p <- ggplot(data = topic.df, aes(x = Topic, y = NatureReac)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p; p %>% ggsave(filename = file.path(res.path, "ScatterPlot_Corr_D3_Topic22_vs_MSNatureReac.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 9, height = 7)
+
+cor.test(x = topic.df$Topic, y = topic.df$Astro)
+cor.test(x = topic.df$Topic, y = topic.df$DAAHabib)
+p <- ggplot(data = topic.df, aes(x = Topic, y = DAAHabib)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p
+
+(SpatialFeaturePlot(D3spatial, features = "NatureCons_ReacAstro1", images = 'D3',  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 100) %>% rev) &
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))) %>% ggsave(filename = file.path(res.path, "SpatialFeaturePlot_D3_NatureCons_ReacAstro1.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 10, height = 11)
+
+
+
+## Cell type enrichment
+pub.markers.filt <- pub.markersdf[pub.markersdf$GeneSymbols %in% rownames(D3spatial@assays$SCT), ]
+Celltype.enrich <- lapply(toi.markers, function(x) clusterProfiler::enricher(gene = x, 
+                                                                             universe = rownames(D3spatial@assays$SCT), 
+                                                                             TERM2GENE = pub.markers.filt, pAdjustMethod = "fdr", pvalueCutoff = 0.01
+                                                                            ))
+Celltype.enrich %>% write.xlsx(file = paste0(ws, "/CelltypeEnrichment_TxtCollection_TopicsOfInterest_", decres, ".xlsx"))
+
+## Visualizing topic markers
+ht.markers <-  toi.markers %>% unlist %>% unique()
+ht.temp <- deconGexp %>% .[rownames(.) %in% toi, ht.markers] %>% t ## smaller matrix of topics that interest me; expression value = probability distribution of cell-type expression, scaled to sum of 1000 across variable genes
+ht <- ggplotify::as.ggplot(pheatmap::pheatmap(ht.temp, 
+                                              labels_row = rownames(ht.temp), labels_col = colnames(ht.temp),
+                                              border_color = F, 
+                                              color = col.list[["pal3"]],
+                                              cluster_rows = F, cluster_cols = F, treeheight_row = 10, treeheight_col = 5,
+                                              scale = "row", 
+                                              cellheight = 3, cellwidth = 10, 
+                                              fontsize_row = 10, fontsize = 15, main = "Day 3 soft clustering")) + theme(text = element_text(family = "OpenSans")); ht; ht %>% ggsave(filename = paste0(ws, "/Heatmap_STdeconvolve_Markers_", section, ".tiff"), plot = ., device = "tiff", dpi = 300, bg = "white", height = 8, width = 3)
+
+```
+
+```{r D7 - STdeconvolve}
+section <- "D7"; decres <- names(STdeconv.reslist) %>% grep(pattern = section, value = T) ## D7_K21
+toi <- c("Topic_3", "Topic_4", "Topic_5", "Topic_8", "Topic_9", "Topic_11", "Topic_16", "Topic_18") ## topics of interest
+toi.markers <- STdeconv.markerlist[[decres]][toi] %>% lapply(FUN = function(df) base::subset(df, values > 0.58) %>% .[["genes"]]) ## markers that are substantially upregulated
+
+deconProp <- STdeconv.reslist[[decres]]$theta; colnames(deconProp) <- paste0("Topic_", colnames(deconProp))
+deconGexp <- STdeconv.reslist[[decres]]$beta; rownames(deconGexp) <- paste0("Topic_", rownames(deconGexp))
+D7spatial <- subset(spatial.seurat, subset = Condition == section)
+D7spatial <- AddMetaData(D7spatial, metadata = deconProp, col.name = deconProp %>% colnames) ## adding the topics to the seurat object
+
+## D7 UMAP clusters topic composition
+umap.clusters <- c("ISD7c", "ISD7p")
+proplist <- lapply(umap.clusters, function(umap){
+  quicklist <- list()
+  temp <- deconProp[rownames(deconProp) %in% Cells(subset(D1spatial, subset = DetailedRegionAnnoShort == umap)),] ## subset section-specific deconProp down to spots for UMAP clusters of interest
+  quicklist[["clusterprop"]] <- temp
+  quicklist[["meanprop"]]<- temp %>% colSums() %>% '/'(nrow(temp)) %>% '*'(100) ## mean topic value per cluster
+  return(quicklist)
+}); names(proplist) <- umap.clusters
+
+## Functional annotation - ORA
+ORA.topic <- lapply(toi.markers, function(x) clusterProfiler::enrichGO(gene = x, # list of genes 
+                                                      universe      = rownames(D7spatial@assays$SCT), # 'potential DEGs', as detected genes within the tissue
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = org.Mm.eg.db,
+                                                      ont           = "BP", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% dplyr::arrange(p.adjust) %>% dplyr::filter(p.adjust < 0.01) #%>% clusterProfiler::simplify()
+                    )
+ORA.topic %>% write.xlsx(file = paste0(ws, "/ORAenrichment_GOterms_TopicsOfInterest_", decres, ".xlsx"), overwrite = T)
+
+## Topic 9 - DAA? ####
+## in spatial plot
+topic <- 'Topic_9'
+D7spatial[[]] %>% names
+spots.to.plot <- Cells(D7spatial)[!is.na(D7spatial[[topic]])]; D7spatial %<>% subset(cells = spots.to.plot) ##remove cells with topics NA value
+(SpatialPlot(object = D7spatial, features = topic, 
+                          images = section, 
+                          crop = F, 
+                          ncol = 1, 
+                          pt.size.factor = 1.35, 
+                          image.alpha = 0, 
+                          alpha = c(0.4, 1), 
+                          combine = T, 
+                          stroke = 0.05) & 
+  viridis::scale_fill_viridis(option = "rocket", 
+                              direction = -1, 
+                              limits = c(0,1), 
+                              alpha = 1, 
+                              end = 0.99) &
+  theme(text = element_text(size = 25), 
+        plot.margin = unit(c(0,0,0,0), "cm"))
+  ) %>% 
+  ggsave(filename = file.path(res.path, "SpatialFeaturePlot_STdecon_D7_Topic9.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 11)
+
+## topic markers
+topic.lfcmarker.df <- data.frame('Genes' = STdeconv.markerlist[[decres]][[topic]]$genes %>% factor(levels = unique(.)),
+                              'Values' = STdeconv.markerlist[[decres]][[topic]]$values)[1:15,] ##logFC markers
+
+topic.expmarker.df <- data.frame('Genes' = deconGexp[topic, ] %>% sort(decreasing = T) %>% names %>% head(15) %>% factor(levels = unique(.)),
+                              'Values' =  deconGexp[topic, ] %>% sort(decreasing = T) %>% head(15)) ##highest expression markers
+
+data <- list(
+  #topic.lfcmarker.df, "logFC"
+  topic.expmarker.df, "Expression"
+  )
+p <- ggplot(data = data[[1]], aes(x = Genes, y = Values, fill = Genes)) + 
+  geom_bar(stat = "identity", show.legend = F, fill = "#C81951FF", color = "#1B112BFF", size = 0.5, width = 0.8, alpha = 0.9) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 55, colour = 'black', face = "italic"), 
+        axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size = 55, colour = 'black'), 
+        axis.title = element_text(size = 45),
+        text = element_text(family = 'OpenSans')) +
+  ylab(data[[2]]) +
+  xlab("") + ggtitle(""); p; p %>% ggsave(filename = paste0(res.path, "/Barplot_", data[[2]], "_MarkerGenes_", section, "_", topic, ".tiff"), device = 'tiff', dpi = 300,units = 'cm', width = 15, height = 9)
+
+
+## enrichment for published genesets
+meta.list <- list(
+  "Kenigsbuch2022_DOLs" = pub.markers[["Oligodendrocytes_DOLs_Keningsbuch2022"]],
+  "Habib2020_DAAs" = pub.markers[["Astro_DAA_vs_homeostatic_Habib2020_up"]]
+)
+meta.df <- lapply(meta.list, head, 300) %>% 
+  plyr::ldply(.fun = rbind, .id = NULL) %>% 
+  .[grep("^Rp|^mt", x = .[["GeneSymbols"]], ignore.case = F, invert = T),] %>% 
+  subset(subset = GeneSymbols %in% colnames(deconGexp)) ## keep only genes present in the topic matrix
+
+meta.enrich <- clusterProfiler::GSEA(geneList = deconGexp[topic, ] %>% sort(decreasing = T),
+                                     TERM2GENE = meta.df, pAdjustMethod = 'fdr', pvalueCutoff = 0.1, verbose = F, minGSSize = 5)
+
+genesetID <- c(meta.df$Celltype %>% unique); genesetID
+IDtochoose <- genesetID[3]
+enrichplot::gseaplot(meta.enrich, geneSetID = IDtochoose, 
+                     title = NULL,
+                     by = 'runningScore') + xlab("") + ylab("") + theme_minimal() + 
+  theme(text = element_text(family = 'OpenSans', size = 20),
+                                                  axis.text.x = element_blank(),
+                                                  axis.text.y = element_blank()) -> p; p; p %>% ggsave(filename = paste0(res.path, "/GSEAplot_", section, "_", topic, "_", IDtochoose, ".tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 4) ## GSEA enrichment plot
+
+
+
+oursnreacastro <- c("Gm28153", "Mnat1", "Mt1", "Gfap", "Fth1", "Mt2", "Igfbp5", "Apoe", "Gfod2", "Dcun1d4"); D7spatial %<>% AddModuleScore(features = list(oursnreacastro), name = "OurSnReacAstro")
+D7spatial %<>% AddModuleScore(features = list(pub.markers$Astro_reactive_Consensus_Nature2021$GeneSymbols), name = "NatureCons_ReacAstro")
+D7spatial %<>% AddModuleScore(features = list(pub.markers$Astro_DAA_vs_Gfaphigh_Habib2020_up$GeneSymbols), name = "Habib_DAA")
+
+topic.df <- data.frame('Cells' = D7spatial %>% Cells,
+                       'Topic' = D7spatial[[topic]][, 1],
+                       'Region' = D7spatial$DetailedRegionAnnoShort,
+                       'RCTD_Astro' = D7spatial$RCTD_Astrocytes,
+                       'NatureReac' = D7spatial$NatureCons_ReacAstro1,
+                       'DAAHabib' = D7spatial$Habib_DAA1,
+                       'DOLs' = D7spatial$DOLs_Keningsbuch1,
+                       'OurSnReacAstro' = D7spatial$OurSnReacAstro1
+                       ) %>% subset(.[['Topic']] != 0)
+
+
+cor.test(x = topic.df$Topic, y = topic.df$NatureReac) ## NatureConsensus Reactive astro markers
+p <- ggplot(data = topic.df, aes(x = Topic, y = NatureReac)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p; p %>% ggsave(filename = file.path(res.path, "ScatterPlot_Corr_D7_Topic9_vs_MSNatureReac.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 9, height = 7)
+
+(SpatialFeaturePlot(D7spatial, features = "NatureCons_ReacAstro1", images = 'D7',  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 100) %>% rev) &
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))) %>% ggsave(filename = file.path(res.path, "SpatialFeaturePlot_D7_NatureCons_ReacAstro.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 10, height = 11)
+
+
+cor.test(x = topic.df$Topic, y = topic.df$DAAHabib) ## Habib DAA markers
+p <- ggplot(data = topic.df, aes(x = Topic, y = DAAHabib)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p; p %>% ggsave(filename = file.path(res.path, "ScatterPlot_Corr_D7_Topic9_vs_MSDAA_Habib.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 9, height = 7)
+
+(SpatialFeaturePlot(D7spatial, features = "Habib_DAA1", images = 'D7',  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 100) %>% rev) &
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))) %>% ggsave(filename = file.path(res.path, "SpatialFeaturePlot_D7_Habib_DAA.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 10, height = 11)
+
+
+cor.test(x = topic.df$Topic, y = topic.df$RCTD_Astro) ## RCTD Astro
+p <- ggplot(data = topic.df, aes(x = Topic, y = RCTD_Astro)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p;
+
+cor.test(x = topic.df$Topic, y = topic.df$OurSnReacAstro)
+p <- ggplot(data = topic.df, aes(x = Topic, y = OurSnReacAstro)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p;
+
+
+
+## Topic 11 ####
+## spatial plot of the topic
+topic <- 'Topic_11'
+D7spatial[[]] %>% names
+spots.to.plot <- Cells(D7spatial)[!is.na(D7spatial[[topic]])]; D7spatial %<>% subset(cells = spots.to.plot) ##remove cells with topics NA value
+(SpatialPlot(object = D7spatial, features = topic, 
+                          images = section, 
+                          crop = F, 
+                          ncol = 1, 
+                          pt.size.factor = 1.35, 
+                          image.alpha = 0, 
+                          alpha = c(0.4, 1), 
+                          combine = T, 
+                          stroke = 0.05) & 
+  viridis::scale_fill_viridis(option = "rocket", 
+                              direction = -1, 
+                              limits = c(0,1), 
+                              alpha = 1, 
+                              end = 0.99) &
+  theme(text = element_text(size = 25), 
+        plot.margin = unit(c(0,0,0,0), "cm"))
+  ) %>% 
+  ggsave(filename = file.path(res.path, "SpatialFeaturePlot_STdecon_D7_Topic11.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 11)
+
+## topic markers
+topic.lfcmarker.df <- data.frame('Genes' = STdeconv.markerlist[[decres]][[topic]]$genes %>% factor(levels = unique(.)),
+                              'Values' = STdeconv.markerlist[[decres]][[topic]]$values)[1:15,] ##logFC markers
+
+topic.expmarker.df <- data.frame('Genes' = deconGexp[topic, ] %>% sort(decreasing = T) %>% names %>% head(15) %>% factor(levels = unique(.)),
+                              'Values' =  deconGexp[topic, ] %>% sort(decreasing = T) %>% head(15)) ##highest expression markers
+
+data <- list(
+  topic.lfcmarker.df, "logFC"
+  #topic.expmarker.df, "Expression"
+  )
+p <- ggplot(data = data[[1]], aes(x = Genes, y = Values, fill = Genes)) + 
+  geom_bar(stat = "identity", show.legend = F, fill = "#C81951FF", color = "#1B112BFF", size = 0.5, width = 0.8, alpha = 0.9) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 55, colour = 'black', face = "italic"), 
+        axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size = 55, colour = 'black'), 
+        axis.title = element_text(size = 45),
+        text = element_text(family = 'OpenSans')) +
+  ylab(data[[2]]) +
+  xlab("") + ggtitle(""); p; p %>% ggsave(filename = paste0(res.path, "/Barplot_", data[[2]], "_MarkerGenes_", section, "_", topic, ".tiff"), device = 'tiff', dpi = 300,units = 'cm', width = 15, height = 9)
+
+
+## enrichment for published genesets
+meta.list <- list(
+  "Pandey2022_MOL_DA2" = pub.markers[["Pandey2022_MOL_DA2_markers_short"]],
+  "Kenigsbuch2022_DOLs" = pub.markers[["Oligodendrocytes_DOLs_Keningsbuch2022"]],
+  "Habib2020_DAAs" = pub.markers[["Astro_DAA_vs_homeostatic_Habib2020_up"]]
+)
+meta.df <- lapply(meta.list, head, 300) %>% 
+  plyr::ldply(.fun = rbind, .id = NULL) %>% 
+  .[grep("^Rp|^mt", x = .[["GeneSymbols"]], ignore.case = F, invert = T),] %>% 
+  subset(subset = GeneSymbols %in% colnames(deconGexp)) ## keep only genes present in the topic matrix
+
+meta.enrich <- clusterProfiler::GSEA(geneList = deconGexp[topic, ] %>% sort(decreasing = T),
+                                     TERM2GENE = meta.df, pAdjustMethod = 'fdr', pvalueCutoff = 0.1, verbose = F, minGSSize = 5)
+
+genesetID <- c(meta.df$Celltype %>% unique); genesetID
+IDtochoose <- genesetID[2]
+enrichplot::gseaplot(meta.enrich, geneSetID = IDtochoose, 
+                     title = NULL,
+                     by = 'runningScore') + xlab("") + ylab("") + theme_minimal() + 
+  theme(text = element_text(family = 'OpenSans', size = 20),
+                                                  axis.text.x = element_blank(),
+                                                  axis.text.y = element_blank()) -> p; p; p %>% ggsave(filename = paste0(res.path, "/GSEAplot_", section, "_", topic, "_", IDtochoose, ".tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 4) ## GSEA enrichment plot
+
+
+
+topic.df <- data.frame('Cells' = D7spatial %>% Cells,
+                       'Topic' = D7spatial[[topic]][, 1],
+                       'Region' = D7spatial$DetailedRegionAnnoShort,
+                       'RCTD_Oligo' = D7spatial$RCTD_Oligodendrocytes,
+                       'RCTD_MGR' = D7spatial$RCTD_Microglia_Reactive,
+                       'NatureReac' = D7spatial$NatureCons_ReacAstro1,
+                       'DAAHabib' = D7spatial$Habib_DAA1,
+                       'DOLs' = D7spatial$DOLs_Keningsbuch1,
+                       'ARMs' = D7spatial$SF_ARM1
+                       ) %>% subset(.[['Topic']] > 0)
+
+cor.test(x = topic.df$Topic, y = topic.df$ARMs)
+p <- ggplot(data = topic.df, aes(x = Topic, y = ARMs)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p; #p %>% ggsave(filename = file.path(res.path, "ScatterPlot_Corr_D7_Topic11_vs_MSARMs.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 9, height = 7)
+
+cor.test(x = topic.df$Topic, y = topic.df$DOLs)
+p <- ggplot(data = topic.df, aes(x = Topic, y = DOLs)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p; p %>% ggsave(filename = file.path(res.path, "ScatterPlot_Corr_D7_Topic11_vs_MSARMs.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 9, height = 7)
+
+
+(SpatialFeaturePlot(D7spatial, features = "DOLs_Keningsbuch1", images = 'D7',  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 100) %>% rev) &
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))) %>% ggsave(filename = file.path(res.path, "SpatialFeaturePlot_D7_Kenigsbuch_DOLs.tiff"), device = 'tiff', dpi = 250, units = 'cm', width = 10, height = 11)
+
+cor.test(x = topic.df$Topic, y = topic.df$RCTD_Oligo) ## RCTD Oligo
+p <- ggplot(data = topic.df, aes(x = Topic, y = RCTD_Oligo)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p;
+
+cor.test(x = topic.df$Topic, y = topic.df$RCTD_MGR) ## RCTD Microglia reactive
+p <- ggplot(data = topic.df, aes(x = Topic, y = RCTD_MGR)) + geom_point(size = 1, shape = 1) + geom_smooth(method = lm, se = F, fullrange = F) + scale_color_brewer(palette="Dark2") + theme_minimal(); p;
+
+
+## Cell type enrichment
+pub.markers.filt <- pub.markersdf[pub.markersdf$GeneSymbols %in% rownames(D7spatial@assays$SCT), ] ## keeping just the genes that could be sufficiently measured
+Celltype.enrich <- lapply(toi.markers, function(x) clusterProfiler::enricher(gene = x, 
+                                                                             universe = rownames(D7spatial@assays$SCT), 
+                                                                             TERM2GENE = pub.markers.filt, pAdjustMethod = "fdr", pvalueCutoff = 0.01
+                                                                            ))
+
+
+## Visualizing topic markers
+ht.markers <-  toi.markers %>% unlist %>% unique()
+ht.markers %>% head
+ht.temp <- deconGexp %>% .[rownames(.) %in% toi, ht.markers] %>% t ## smaller matrix of topics that interest me; expression value = probability distribution of cell-type expression, scaled to sum of 1000 across variable genesSpatialFeaturePlot_DOLsKeningsbuch2022
+ht <- ggplotify::as.ggplot(pheatmap::pheatmap(ht.temp, 
+                                              labels_row = rownames(ht.temp), labels_col = colnames(ht.temp),
+                                              border_color = F, 
+                                              color = col.list[["pal3"]],
+                                              cluster_rows = F, cluster_cols = F, treeheight_row = 10, treeheight_col = 5,
+                                              scale = "row", 
+                                              cellheight = 3, cellwidth = 10, 
+                                              fontsize_row = 10, fontsize = 15, main = "Day 7 soft clustering")) + theme(text = element_text(family = "OpenSans")); ht; ht %>% ggsave(filename = paste0(ws, "/Heatmap_STdeconvolve_Markers_", section, ".tiff"), plot = ., device = "tiff", dpi = 300, bg = "white", height = 11, width = 3)
+```
+
+```{r topic.list - Plotting the topics of interest}
+topic.list <- list("D1_K24" = c("Topic_1", "Topic_2", "Topic_15", "Topic_16", "Topic_24"),
+                   "D3_K24" = c("Topic_9", "Topic_10", "Topic_12", "Topic_13", "Topic_22", "Topic_23"),
+                   "D7_K21" = c("Topic_9", "Topic_11", "Topic_16", "Topic_18")
+                     )
+topic.list
+spatial.list <- list()
+
+## selection of marker lists for enrichment
+pub.markers %>% names
+enrichlists <- c("Astro_DAA_vs_Gfaphigh_Habib2020_up",
+                 "Oligodendrocytes_DOLs_Keningsbuch2022", 
+                 "Pandey2022_MOL_DA1_markers", 
+                 "Pandey2022_MOL_DA2_markers", 
+                 "Pandey2022_MOL_IFN_markers")
+
+pub.markersdf <- lapply(pub.markers, head, 300) %>% 
+  plyr::ldply(.fun = rbind, .id = NULL) %>% 
+  .[grep("^Rp|^mt", x = .[["GeneSymbols"]], ignore.case = F, invert = T),]
+
+pub.markers.sel <- pub.markersdf %>% 
+  subset(subset = GeneSymbols %in% rownames(spatial.seurat@assays$SCT)) %>%  ## keep only genes present in the count matrix
+  subset(subset = Celltype %in% enrichlists) ## subset for enrichment lists of interest
+
+pub.markers.sel$Celltype %<>% as.factor(); pub.markers.sel.l <- pub.markers.sel %>% split(f = .[['Celltype']])
+
+
+# D1 ####
+section <- "D1"; decres <- names(STdeconv.reslist) %>% grep(pattern = section, value = T) ## D1_K24
+deconTopics <- STdeconv.reslist[[decres]]$theta; colnames(deconTopics) <- paste0("Topic_", colnames(deconTopics)); deconTopics <- deconTopics[, topic.list[[decres]]]
+spatial.list[[decres]] <- subset(spatial.seurat, subset = Condition == section) %>% AddMetaData(object = ., metadata = deconTopics, col.name = deconTopics %>% colnames) ## adding the topics to the seurat object
+
+# D3 ####
+section <- "D3"; decres <- names(STdeconv.reslist) %>% grep(pattern = section, value = T) ## D3_K24
+deconTopics <- STdeconv.reslist[[decres]]$theta; colnames(deconTopics) <- paste0("Topic_", colnames(deconTopics)); deconTopics <- deconTopics[, topic.list[[decres]]]
+spatial.list[[decres]] <- subset(spatial.seurat, subset = Condition == section) %>% AddMetaData(object = ., metadata = deconTopics, col.name = deconTopics %>% colnames) ## adding the topics to the seurat object
+
+## enrichment
+D3result <- lapply(topic.list[[decres]], function(topic){
+  deconGexp <- STdeconv.reslist[[decres]]$beta; rownames(deconGexp) <- paste0("Topic_", rownames(deconGexp))
+  ranked.genes <- deconGexp[topic,] %>% sort(decreasing = T)
+  ranked.genes %>% head %>% print 
+  gsea.result <- clusterProfiler::GSEA(geneList = ranked.genes,
+                                     TERM2GENE = pub.markers.sel, 
+                                     pAdjustMethod = 'fdr', 
+                                     pvalueCutoff = 0.05, 
+                                     verbose = F, 
+                                     minGSSize = 10)
+  return(gsea.result)
+}); names(D3result) <- topic.list[[decres]]; paste("Enrichment for the section with topics of ", decres)
+
+
+# D7 ####
+section <- "D7"; decres <- names(STdeconv.reslist) %>% grep(pattern = section, value = T) ## D7_K21
+deconTopics <- STdeconv.reslist[[decres]]$theta; colnames(deconTopics) <- paste0("Topic_", colnames(deconTopics)); deconTopics <- deconTopics[, topic.list[[decres]]]
+spatial.list[[decres]] <- subset(spatial.seurat, subset = Condition == section) %>% AddMetaData(object = ., metadata = deconTopics, col.name = deconTopics %>% colnames) ## adding the topics to the seurat object
+
+D7result <- lapply(topic.list[[decres]], function(topic){
+  deconGexp <- STdeconv.reslist[[decres]]$beta; rownames(deconGexp) <- paste0("Topic_", rownames(deconGexp))
+  ranked.genes <- deconGexp[topic,] %>% sort(decreasing = T)
+  ranked.genes %>% head %>% print 
+  pub.markersdf.interested <-  pub.markers[c('Oligodendrocytes_DOLs_Keningsbuch2022', "Astro_DAA_vs_Gfaphigh_Habib2020_up")] %>% plyr::ldply(rbind, .id = NULL)
+  gsea.result <- clusterProfiler::GSEA(geneList = ranked.genes,
+                                     TERM2GENE = pub.markers.sel, pAdjustMethod = 'fdr', pvalueCutoff = 0.05, verbose = F, minGSSize = 10)
+  return(gsea.result)
+}); names(D7result) <- topic.list[[decres]]; paste("Enrichment for the section with topics of ", decres)
+
+
+# ischemic topics in a single plot ####
+p <- lapply(names(spatial.list), function(decres){
+  lapply(topic.list[[decres]], function(topic){
+    p1 <- (SpatialFeaturePlot(spatial.list[[decres]], features = topic, images = decres %>% stringr::str_remove(pattern = "_K.*") ,  crop = F, ncol = 1, pt.size.factor = 1.5, image.alpha = 0.2, combine = T, stroke = 0) & viridis::scale_fill_viridis(option = "F", direction = -1, limits = c(0,1), alpha = 1, end = 0.95)) & labs(fill = topic) & 
+    theme(text = element_text(family = "OpenSans", size = 25), plot.margin = unit(c(0,0,0,0), "cm"))})
+}); p <- p %>% unlist(recursive = F) ## one list of the Spatial plots across timepoints
+  
+cowplot::plot_grid(plotlist = p, ncol = 5, label_fontfamily = "OpenSans") %>% ggsave(filename = file.path(ws, paste0("SpatialPlots_STdeconvolve_All_TopicsOfInterest.tiff")), plot = ., device = "tiff", dpi = 250, bg = "white", width = 25, height = 15); gc()
+```
+
+```{r Topic markers - expression in heatmaps}
+## Standard cell types ####
+common.celltypes <- c("Vxn", "Gad1",         ## GABAergic neurons
+                      "Nrgn", "Slc17a7", ## glutamatergic neurons
+                      "Aldh1l1", "Aqp4",     ## astrocytes
+                      "Cldn11", "Mobp", ## oligodendrocyte
+                      "Pdgfra", "Myrf", ## OPC
+                      "Csf1r", "Aif1", ## microglia
+                      "Gpnmb", "Lyz2", ## peripheral immune cells
+                      "Acta2", "Vtn", ## vascular + pericytes 
+                      "Vcam1", "Pdgfrb",     ## endothelial cells
+                      "Col1a2", "Dcn",       ## fibroblasts
+                      "Foxj1",  "Ccdc153"   ## ependymal cells
+                      )
+
+exp <- lapply(names(topic.list), function(x){
+  temp <- STdeconv.reslist[[x]][["beta"]]
+  temp <- temp[topic.list[[x]] %>% stringr::str_remove(pattern = "Topic_"), match(common.celltypes, table = colnames(temp))]
+  temp[is.na(temp)] <- 0
+  colnames(temp) <- common.celltypes
+  rownames(temp) <- paste0(x, "_Topic_", rownames(temp))
+  return(temp)
+  })
+
+
+## what common markers are not approximated?
+common.celltypes
+common.celltypes[!(common.celltypes %in% exp[[1]])]
+common.celltypes[!(common.celltypes %in% exp[[2]])]
+common.celltypes[!(common.celltypes %in% exp[[3]])]
+
+## plotting the common markers
+exp.rbind <- Reduce(rbind, exp); exp.rbind
+ht <- ggplotify::as.ggplot(pheatmap::pheatmap(exp.rbind, 
+                                              labels_row = rownames(exp.rbind), labels_col = colnames(exp.rbind),
+                                              border_color = F, 
+                                              cluster_rows = F, cluster_cols = F, treeheight_row = 10, treeheight_col = 5,
+                                              scale = "row", 
+                                              gaps_col = seq(from = 2, by = 2, length.out = 10), 
+                                              gaps_row = c(5, 11), 
+                                              cellheight = 6, cellwidth = 6, angle_col = 315,
+                                              fontsize_col = 10, fontsize = 15, main = "Basic Celltype Annotation")) + theme(text = element_text(family = "OpenSans")); ht
+plot(ht)
+ht %>% ggsave(filename = paste0(ws, "/Heatmap_STdeconvolve_BasicCelltype_Annotation.tiff"), plot = ., device = "tiff", dpi = 300, bg = "white", height = 4, width = 6)
+
+
+## markers expression for topics of interest ####
+topic.list
+top.markers <- lapply(names(topic.list), function(x){
+  temp <- STdeconv.markerlist[[x]][topic.list[[x]]]
+  temp.list <- lapply(topic.list[[x]], function(y){
+    temp[[y]]$genes[temp[[y]]$value > 0.58]
+  })
+  unlist(temp.list) %>% unique
+  }); names(top.markers) <- names(topic.list); top.markers <- top.markers %>% unlist %>% unique ## value: vector of markers across the three timepoints for the topics of interest
+
+marker.exp <- lapply(names(topic.list), function(x){
+  temp <- STdeconv.reslist[[x]][["beta"]]
+  temp <- temp[topic.list[[x]] %>% stringr::str_remove(pattern = "Topic_"), match(top.markers, table = colnames(temp))]
+  temp[is.na(temp)] <- 0
+  colnames(temp) <- top.markers
+  rownames(temp) <- paste0(x, "_Topic_", rownames(temp))
+  return(temp)
+  }); Reduce(rbind, marker.exp) %>% t %>% "+"(1) %>% log2 -> marker.exp ## value: matrix of expression for all markers across ale the topics of interest
+
+ht <- ggplotify::as.ggplot(pheatmap::pheatmap(marker.exp, 
+                                              labels_row = rownames(marker.exp), labels_col = colnames(marker.exp),
+                                              border_color = F, 
+                                              color = viridis::rocket(n = 500, direction = -1) ,
+                                              cluster_rows = T, cluster_cols = T, treeheight_row = 10, treeheight_col = 5,
+                                              scale = "none", 
+                                              #gaps_col = c(5, 11), 
+                                              cellheight = 3, cellwidth = 6, angle_col = 90,
+                                              fontsize_row = 10, fontsize = 12, main = "Marker expression log2")) + theme(text = element_text(family = "OpenSans"))
+ht %>% ggsave(filename = paste0(ws, "/Heatmap_STdeconvolve_MarkerExpression_log2.tiff"), plot = ., device = "tiff", dpi = 300, bg = "white", height = 15, width = 10)
+```
