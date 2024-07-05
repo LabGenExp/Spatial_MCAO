@@ -178,6 +178,14 @@ rm(section, full_spatalk)
 plot_st_pie(object = spatalk.list[[4]], 
             color = col.list$zeng.cols, 
             pie_scale = 0.4)
+
+
+# 
+plot_lrpair(object = full_spatalk, 
+            celltype_sender = "Neurons", 
+            celltype_receiver = "Microglia", 
+            ligand = "Apoe", 
+            receptor = "Trem2")
 ```
 
 Scrape the results of significant mutual interactions to create a general view.
@@ -269,6 +277,21 @@ for(i in seq_along(sections)) {
 
 ```
 
+Save the lists of interactions
+```{r save interactions lists}
+result.list[["Interaction_lists"]] <- sections %>% lapply(\(x){
+  temp <- spatalk.list[[x]]@lrpair %>% 
+    mutate(Condition = rep(x, times = nrow(.)), 
+           CellPair = paste0(celltype_sender, "-", celltype_receiver), 
+           LRpair = paste0(ligand, "-", receptor))
+  return(temp)
+})
+names(result.list[["Interaction_lists"]]) <- sections
+
+write.xlsx(result.list[["Interaction_lists"]], 
+           file = file.path(ws, "SpaTalk_Cell_cell_interactions_MCAO_lesions.xlsx"))
+```
+
 What ligand is the most active
 ```{r most abundant ligand}
 ligand_summary <- sections %>% lapply(\(x){
@@ -279,12 +302,11 @@ ligand_summary <- sections %>% lapply(\(x){
       unique_celltypes_expressing = n_distinct(celltype_sender),
       ) %>% 
     ungroup %>% 
-    mutate(Condition = rep(x, times = nrow(.)))
-  
+    mutate(Condition = rep(x, times = nrow(.))) %>% 
+    arrange(desc(total_interactions))
   return(temp)
 }) %>% 
   bind_rows()
-
 
 top_10_ligands <- ligand_summary %>% 
   group_by(ligand) %>% 
@@ -325,6 +347,24 @@ temp <- spatalk.list[[section]]@lrpair %>%
   summarise(total_OL_interactions = sum(lr_co_exp_num ), 
             .groups = "drop") %>% 
   arrange(desc(total_OL_interactions))
+
+```
+
+The most abundant receptors
+```{r most abundant receptors}
+receptor_summary <- sections %>% lapply(\(x){
+  temp <- spatalk.list[[x]]@lrpair %>% 
+    group_by(receptor) %>% 
+    summarise(
+      total_interactions = sum(lr_co_exp_num), 
+      unique_celltypes_expressing = n_distinct(celltype_receiver),
+      ) %>% 
+    ungroup %>% 
+    mutate(Condition = rep(x, times = nrow(.))) %>% 
+    arrange(desc(total_interactions))
+  return(temp)
+}) %>% 
+  bind_rows()
 
 ```
 

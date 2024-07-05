@@ -7,7 +7,9 @@ output: html_document
 
 Hello, 
 
-In this markdown we will reanalyse a published dataset from [Han et al 2024](https://www.science.org/doi/10.1126/scitranslmed.adg1323) that used 10X Visium to study 3DPI of multiple coronal sections after induced stroke with the phototrombotic stroke model.
+In this markdown we will reanalyse published datasets:
+- [Han et al 2024](https://www.science.org/doi/10.1126/scitranslmed.adg1323) that used 10X Visium to study 3DPI of multiple coronal sections after induced stroke with the phototrombotic stroke model.
+- [Scott et al 2024](https://www.nature.com/articles/s41467-024-45821-y) that focused on astrocytes in cortical ischemic stroke in 2-10-21DPI.
 
 ```{r libraries}
 library(Seurat)
@@ -23,6 +25,7 @@ options(Seurat.object.assay.version = "v5")
 options(future.globals.maxSize = 1e9)
 ```
 
+# Han et al 2024
 ```{r path and lists}
 # ws
 if(!dir.exists("ws/MetanalysisHan2024")){dir.create("ws/MetanalysisHan2024")
@@ -270,8 +273,6 @@ spatial_QC <- function(seu = spatial.seurat, groupings = "Condition"){
 
 spatial.seurat$nCount_Spatial %>% summary
 spatial.seurat$nFeature_Spatial %>% summary
-
-
 ```
 
 Filter
@@ -1065,3 +1066,257 @@ seurat %>% FeaturePlot(
 
 ```
 
+
+# Scott et al 2024
+```{r path and lists}
+# ws
+if(!dir.exists("ws/MetanalysisScott2024")){dir.create("ws/MetanalysisScott2024")
+  ws <- "ws/MetanalysisScott2024"}else{ws <- "ws/MetanalysisScott2024"}
+
+# lists for saving
+plot.list <- list()
+result.list <- list()
+```
+
+```{r create separate seurat objects}
+# identify sections
+sections <- list.dirs(path = "data/Metadata/Scott2024/seurat_ready", 
+                      recursive = F, 
+                      full.names = F) # list the names of sections
+
+# individual seurat for each section
+seurat.list <- lapply(sections, \(section){
+  
+  data.path <- file.path("data", "Metadata", "Scott2024", "seurat_ready") # path to project data
+  final.path <- file.path(data.path, section) # path to section data
+  
+  # create spatial seurat object
+  seurat <- Seurat::Load10X_Spatial(
+    data.dir = final.path, 
+    filename = file.path("h5_files", "filtered_feature_bc_matrix.h5"), 
+    assay = "Spatial", 
+    slice = section, 
+    filter.matrix = F
+    )
+  
+  no.spots <- dim(seurat)[2] # the number of spots
+  
+  # add metadata
+  require(stringr)
+  if(section %>% str_detect(pattern = "Sham")) {
+    md <- data.frame(
+      "Condition" = rep("Sham", length.out = no.spots),
+      "Injury" = rep("Sham", length.out = no.spots),
+      "SectionName" = rep(section, length.out = no.spots)
+    )
+  } else {
+    md <- data.frame("Injury" = rep("MCAO", length.out = no.spots))
+    if (section == "2DPI") {
+      md %<>%
+        mutate(
+          Condition = rep("2DPI", length.out = no.spots),
+          SectionName = rep(section, length.out = no.spots)
+        )
+    } else if (section == "10DPI") {
+      md %<>%
+        mutate(
+          Condition = rep("10DPI", length.out = no.spots),
+          SectionName = rep(section, length.out = no.spots)
+        )
+    } else if (section == "21DPI") {
+      md %<>%
+        mutate(
+          Condition = rep("21DPI", length.out = no.spots),
+          SectionName = rep(section, length.out = no.spots)
+        )
+    } else {
+      message("Section name not found.")
+    }
+  }
+  
+  seurat %<>% AddMetaData(metadata = md)
+  
+  message(section, " was processed.")
+  return(seurat)
+}); names(seurat.list) <- sections
+
+# merge into one large seurat
+spatial.seurat <- merge(x = seurat.list[[1]], 
+                        y = seurat.list[2:length(seurat.list)], 
+                        add.cell.ids = names(seurat.list), 
+                        project = "Scott2024")
+
+# metadata as factors
+spatial.seurat@meta.data %<>% mutate(
+  Condition = factor(Condition, levels = c("Sham", "2DPI", "10DPI", "21DPI")), 
+  Injury = factor(Injury, levels = c("Sham", "MCAO")), 
+  SectionName = factor(SectionName, levels = sections)
+)
+
+# percent MT and RIB
+spatial.seurat %<>% PercentageFeatureSet(pattern = "^mt-", col.name = "percent.mt")
+spatial.seurat %<>% PercentageFeatureSet(pattern = "^Rpl|Rps", col.name = "percent.rib")
+```
+
+save Scott 2024 spatial seurat
+```{r save spatial seurat scott 2024}
+saveRDS(spatial.seurat, file = file.path("data", "Metadata", "spatialseurat_Scott2024.rds"))
+```
+
+Check QC
+```{r QC}
+# QC plot summary
+spatial_QC <- function(seu = spatial.seurat, groupings = "Condition"){
+  plots <- list()
+  
+  if(groupings %in% names(col.list)){
+    cols <- col.list[[groupings]]
+  } else {
+    cols <- col.list$Retro_TenDiscreet
+  }
+  
+  # Feature Scatters
+  plots[["Scatter_Count_Feature"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "nFeature_Spatial", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("RNA vs Gene content")
+  
+  plots[["Scatter_Count_percentMT"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "percent.mt", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("total RNA vs mtRNA content")
+  
+  plots[["Scatter_Count_percentRIB"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "percent.rib", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("total RNA vs ribRNA content")
+  
+  plots[["Scatter_Feature_percentMT"]] <- (seu %>% FeatureScatter(
+    feature1 = "nFeature_Spatial", 
+    feature2 = "percent.mt", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("Gene count vs mtRNA content")
+  
+  # VlnPlot
+  plots[["Vln_Count_Feature_MT_RIB"]] <- (VlnPlot(
+    object = seu, 
+    features = c("nCount_Spatial", "nFeature_Spatial", "percent.mt", "percent.rib"), 
+    group.by = groupings, 
+    ncol = 1, 
+    combine = T, 
+    pt.size = 0, 
+    cols = cols)) & 
+    geom_boxplot(width=0.1, fill="white", outlier.size = 0.2) & # add boxplot inside the violins
+    xlab(NULL) &
+    ylab(NULL)
+  
+  # Spatial
+  plots[["Spatial_Count"]] <- (SpatialPlot(
+    object = seu, 
+    features = "nCount_Spatial", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = 8, 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_grey_to_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  plots[["Spatial_Feature"]] <- (SpatialPlot(
+    object = seu, 
+    features = "nFeature_Spatial", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = 8, 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_grey_to_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  plots[["Spatial_percentMT"]] <- (SpatialPlot(
+    object = seu, 
+    features = "percent.mt", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = 8, 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+    plots[["Spatial_percentRIB"]] <- (SpatialPlot(
+      object = seu, 
+      features = "percent.rib", 
+      crop = F, 
+      alpha = 1, 
+      image.alpha = 0, 
+      pt.size.factor = 1.5, 
+      stroke = 0, 
+      ncol = 8, 
+      combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  wrapped_plots <- patchwork::wrap_plots(
+    plots, 
+    byrow = T, 
+    ncol = 4, 
+    nrow = 5, 
+    design = "ABCD
+              EFFF
+              EGGG
+              EHHH
+              EIII"
+  ) & theme_mk & NoLegend() 
+  
+  wrapped_plots <- wrapped_plots + 
+    plot_annotation(
+      title = "QC before filtering", 
+      subtitle = "Han2024") ## unify the plotting scheme
+  
+  return(wrapped_plots)
+}
+
+{
+  plot.list[["QC_before_filtering"]] <- spatial_QC(
+    seu = spatial.seurat, 
+    groupings = "SectionName")
+  
+  print(plot.list[["QC_before_filtering"]])
+  
+  plot.list[["QC_before_filtering"]] %>% ggsave_tiff(
+    plotname = "QCplots_Scott2024_prefiltering", ws_location = ws, height = 35, width = 35)
+}
+
+spatial.seurat$nCount_Spatial %>% summary
+spatial.seurat$nFeature_Spatial %>% summary
+```

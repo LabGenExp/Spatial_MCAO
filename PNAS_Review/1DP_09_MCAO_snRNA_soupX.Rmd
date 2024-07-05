@@ -1,0 +1,959 @@
+---
+title: "MCAO snRNA-Seq processing soupX, neuro a non-neuro datasets"
+author: "Pavel Abaffy"
+date: "2023-06-12"
+output: html_document
+---
+
+Markdown for removing the background RNA from the processed data.
+
+Load required packages
+```{r, message=FALSE, warning=FALSE, paged.print=TRUE}
+suppressMessages(library("SingleCellExperiment"))
+suppressMessages(library("scater"))
+suppressMessages(library("Matrix"))
+suppressMessages(library("NormExpression"))
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("scran"))
+suppressMessages(library("DESeq2"))
+suppressMessages(library("pheatmap"))
+suppressMessages(library("RColorBrewer"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("sctransform"))
+suppressMessages(library("DT"))
+suppressMessages(library("scales"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("MAST"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("scmap"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scCATCH"))
+suppressMessages(library("SoupX"))
+suppressMessages(library("reshape2"))
+library(magrittr)
+```
+
+```{r misc}
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+
+Load samples
+```{r load samples}
+samples<-read.table("data/samples.csv",header=TRUE,sep=",")
+samples %<>% filter(Project == "lesion_single_nucleus")
+```
+
+Load datasets
+```{r load datasets, include = FALSE}
+STAR <- readRDS("STAR_raw.rds")
+seurat_final <- readRDS("seurat_final_cell_cylce.rds") ## the final seurat output of the "MCAO_snRNA_preprocessing.Rmd"
+```
+
+Soup channel
+```{r soupchannel, eval=FALSE, message=FALSE, warning=FALSE}
+seurat_sc <- as.list(NULL)
+for(i in 1:nrow(samples)) {
+  seurat <- subset(seurat_final, subset = Sample %in% c(samples$SampleName[i]))
+  STAR[[i]][["RNA"]] <- STAR[[i]][["RNA"]][,colSums(STAR[[i]][["RNA"]]) != 0]
+  STAR[[i]][["RNA"]] <- STAR[[i]][["RNA"]][!(duplicated(rownames(STAR[[i]][["RNA"]]))),]
+  seurat_sc[[as.vector(samples$SampleName[i])]] <- SoupChannel(tod = STAR[[i]][["RNA"]],
+                                                               toc = STAR[[i]][["RNA"]][,colnames(STAR[[i]][["RNA"]]) %in% colnames(seurat)],
+                                                               meta.data = seurat@meta.data[,c(4:5,11:13,16:18)],
+                                                               calcSoupProfile = TRUE)
+}
+```
+
+save the output
+```{r, eval = FALSE}
+rm(i, STAR, seurat)
+saveRDS(seurat_sc,"seurat_sc.rds")
+```
+
+load the seurat
+```{r, eval = TRUE}
+seurat_sc <- readRDS("seurat_sc.rds")
+```
+
+setting up the dimension reduction for channels
+```{r soupchannel, eval=FALSE, message=FALSE, warning=FALSE}
+for(i in 1:nrow(samples)) {
+  seurat <- subset(seurat_final, subset = Sample %in% c(samples$SampleName[i]))
+  seurat_sc[[i]] <- setClusters(seurat_sc[[i]], clusters = seurat_sc[[i]]$meta.data$cell_type_1)
+  seurat_sc[[i]] <- setDR(seurat_sc[[i]], seurat@reductions$umap@cell.embeddings)
+}
+```
+
+save the seurat
+```{r, eval = FALSE}
+rm(i, seurat)
+saveRDS(seurat_sc,"seurat_sc_metadata.rds")
+```
+
+read the seurat
+```{r, eval = TRUE}
+seurat_sc <- readRDS("seurat_sc_metadata.rds")
+```
+
+Calculate the contamination fraction
+```{r soupchannel contamination fraction, eval=FALSE}
+for(i in 1:nrow(samples)) {
+  seurat_sc[[i]] <- autoEstCont(seurat_sc[[i]])
+}
+```
+
+save the seurat
+```{r, eval = FALSE}
+saveRDS(seurat_sc,"seurat_sc_estCont.rds")
+```
+
+read the seurat
+```{r, eval = TRUE}
+seurat_sc <- readRDS("seurat_sc_estCont.rds")
+```
+
+Remove background contamination from count matrix
+```{r removing background RNA}
+seurat_out <- as.list(NULL)
+for(i in 1:nrow(samples)) {
+  seurat_out[[i]] <- adjustCounts(seurat_sc[[i]])
+}
+```
+
+save the cleaned-up seurat
+```{r, eval = FALSE}
+saveRDS(seurat_out,"seurat_out.rds")
+```
+
+```{r}
+for(i in 1:nrow(samples)) {
+  print(samples$SampleName[i])
+  cntSoggy <- rowSums(seurat_sc[[i]]$toc > 0)
+  cntStrained <- rowSums(seurat_out[[i]] > 0)
+  print(tail(sort((cntSoggy - cntStrained)/cntSoggy), n = 20))
+  print("\n")
+  print(tail(sort(rowSums(seurat_sc[[i]]$toc > seurat_out[[i]])/rowSums(seurat_sc[[i]]$toc >0 )), n = 20))
+  print("\n")
+  print("\n")
+}
+```
+
+=== Working with the cleaned Seurat ===
+
+```{r color palette, fig.width = 8, fig.height = 5}
+colors <- c('#46f0f0', #Endo/Peri
+            '#e6194b', #VLMC
+            '#808bd9', #EPEN
+            '#f032e6', #ASTRO
+            '#f032e6', #ASTRO
+            '#911eb4', #OLIGO
+            '#f58231', #OPC
+            '#4363d8', #MG
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#3cb44b', #Glutamatergic
+            '#fabebe', #Gluta/GABA
+            '#a9a9a9', #GABAergic
+            '#a9a9a9', #GABAergic
+            '#a9a9a9', #GABAergic
+            '#a9a9a9', #GABAergic
+            '#a9a9a9', #GABAergic
+            '#a9a9a9', #GABAergic
+            '#000000'  #NB
+            )
+```
+
+```{r samples}
+samples<-read.table("data/samples.csv",header=TRUE,sep=",")
+samples %<>% filter(Project == "lesion_single_nucleus")
+```
+
+Separate the cells on neuronal and non-neuronal
+```{r  eval = FALSE}
+all_cells <- readRDS("seurat_final_cell_cylce.rds")
+cells_neuro <- subset(all_cells, subset = cell_type_1 %in% c("Glutamatergic 1", "Glutamatergic 2", "Glutamatergic 3", "Glutamatergic 4", "Glutamatergic 5", "Glutamatergic 6", "Glutamatergic 7",
+                                                             "Glutamatergic 8", "Glutamatergic 9", "Glutamatergic 10", "Neuro 1",
+                                                             "GABAergic 1", "GABAergic 2", "GABAergic 3", "GABAergic 4", "GABAergic 5", "GABAergic 6", "NB"))
+cells_nonneuro <- subset(all_cells, subset = cell_type_1 %in% c("PER/Endo","VLMC","EPEN", "ASTRO","ASTRO/OLIGO", "OLIGO", "OPC", "MG","NB"))
+STAR <- readRDS("seurat_out.rds") ## the soupX cleaned seurats
+```
+
+Merging the soupX-ed seurats
+```{r eval=FALSE, warning=FALSE}
+STAR_merged <- NULL
+STAR_merged[["RNA"]] <- cbind(STAR[[1]],STAR[[2]],STAR[[3]],STAR[[4]])
+```
+
+Preparing the neuro and non-neuro cleaned Seurats
+```{r eval=FALSE, warning=FALSE}
+counts_neuro <- STAR_merged[["RNA"]][,colnames(STAR_merged[["RNA"]]) %in% colnames(cells_neuro)]
+counts_nonneuro <- STAR_merged[["RNA"]][,colnames(STAR_merged[["RNA"]]) %in% colnames(cells_nonneuro)]
+colData <- all_cells@meta.data[,c(4:5,12:13,16:18)]
+
+seurat_neuro <- CreateSeuratObject(counts = counts_neuro, project = "snRNA_MCAO_neuro", assay = "RNA", meta.data = colData)
+seurat_nonneuro <- CreateSeuratObject(counts = counts_nonneuro, project = "snRNA_MCAO_non-neuro", assay = "RNA", meta.data = colData)
+seurat_all <- CreateSeuratObject(counts = STAR_merged[["RNA"]], project = "snRNA_MCAO_all", assay = "RNA", meta.data = colData)
+```
+
+save the seurats
+```{r save, eval = FALSE}
+rm(all_cells, cells_neuro, cells_nonneuro, counts_neuro, counts_nonneuro, STAR, colData, STAR_merged)
+saveRDS(seurat_neuro,"seurat_neuro_soupX.rds")
+saveRDS(seurat_nonneuro,"seurat_non-neuro_soupX.rds")
+saveRDS(seurat_all,"seurat_all_soupX.rds")
+```
+
+read the seurats
+```{r, eval = TRUE}
+seurat_neuro <- readRDS("seurat_neuro_soupX.rds")
+seurat_nonneuro <- readRDS("seurat_non-neuro_soupX.rds")
+seurat_all <- readRDS("seurat_all_soupX.rds")
+```
+
+percent mito and ribo
+```{r ribo and mito content, eval = TRUE}
+seurat_neuro[["percent.mt"]] <- PercentageFeatureSet(seurat_neuro, pattern = "^mt-")
+seurat_neuro[["percent.rib"]] <- PercentageFeatureSet(seurat_neuro, pattern = "^Rpl|^Rps")
+
+seurat_nonneuro[["percent.mt"]] <- PercentageFeatureSet(seurat_nonneuro, pattern = "^mt-")
+seurat_nonneuro[["percent.rib"]] <- PercentageFeatureSet(seurat_nonneuro, pattern = "^Rpl|^Rps")
+```
+
+QC check
+```{r QC metrics, fig.width = 6, fig.height = 10}
+multiplot(VlnPlot(seurat_neuro, features = c("nFeature_RNA"), pt.size = 0.2, group.by = "cell_type_1") + NoLegend() + geom_hline(yintercept = 700) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)),
+          VlnPlot(seurat_neuro, features = c("nCount_RNA"), pt.size = 0.2, group.by = "cell_type_1") + NoLegend() + geom_hline(yintercept = c(1000,50000)) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)),
+          VlnPlot(seurat_neuro, features = c("percent.mt"), pt.size = 0.2, group.by = "cell_type_1") + NoLegend() + geom_hline(yintercept = 8)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)),
+          cols = 1)
+
+multiplot(VlnPlot(seurat_neuro, features = c("nFeature_RNA"), pt.size = 0.0) + NoLegend() + geom_hline(yintercept = 700),
+          VlnPlot(seurat_neuro, features = c("nCount_RNA"), pt.size = 0.0) + NoLegend() + geom_hline(yintercept = c(1000,50000)),
+          VlnPlot(seurat_neuro, features = c("percent.mt"), pt.size = 0.0) + NoLegend() + geom_hline(yintercept = 8),
+          cols = 1)
+
+
+multiplot(VlnPlot(seurat_nonneuro, features = c("nFeature_RNA"), pt.size = 0.2, group.by = "cell_type_1") + NoLegend() + geom_hline(yintercept = 700) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)),
+          VlnPlot(seurat_nonneuro, features = c("nCount_RNA"), pt.size = 0.2, group.by = "cell_type_1") + NoLegend() + geom_hline(yintercept = c(1000,50000)) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)),
+          VlnPlot(seurat_nonneuro, features = c("percent.mt"), pt.size = 0.2, group.by = "cell_type_1") + NoLegend() + geom_hline(yintercept = 8)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)),
+          cols = 1)
+
+multiplot(VlnPlot(seurat_nonneuro, features = c("nFeature_RNA"), pt.size = 0.0) + NoLegend() + geom_hline(yintercept = 700),
+          VlnPlot(seurat_nonneuro, features = c("nCount_RNA"), pt.size = 0.0) + NoLegend() + geom_hline(yintercept = c(1000,50000)),
+          VlnPlot(seurat_nonneuro, features = c("percent.mt"), pt.size = 0.0) + NoLegend() + geom_hline(yintercept = 8),
+          cols = 1)
+```
+
+QC in Feature plot
+```{r, fig.width = 6, fig.height = 4.5}
+FeatureScatter(seurat_neuro, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "cell_type_1", cols = colors, pt.size = 1.5)
+FeatureScatter(seurat_nonneuro, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "cell_type_1", cols = colors, pt.size = 1.5)
+```
+
+save the seurats
+```{r, eval = FALSE}
+saveRDS(seurat_neuro,"seurat_neuro_QC_soupX.rds")
+saveRDS(seurat_nonneuro,"seurat_non-neuro_QC_soupX.rds")
+```
+
+load the seurats
+```{r, eval = FALSE}
+seurat_neuro <- readRDS("seurat_neuro_QC_soupX.rds")
+seurat_nonneuro <- readRDS("seurat_non-neuro_QC_soupX.rds")
+```
+
+Normalize the seurats
+```{r, eval = FALSE, warning = FALSE}
+all.genes <- rownames(seurat_neuro)
+
+seurat_neuro <- NormalizeData(seurat_neuro, normalization.method = "LogNormalize", scale.factor = 10000, assay = "RNA")
+seurat_neuro <- ScaleData(seurat_neuro, features = all.genes, assay = "RNA")
+seurat_neuro <- SCTransform(seurat_neuro, verbose = TRUE, return.only.var.genes = FALSE,assay = "RNA", n_genes = NULL, variable.features.n = NULL)
+
+seurat_nonneuro <- NormalizeData(seurat_nonneuro, normalization.method = "LogNormalize", scale.factor = 10000, assay = "RNA")
+seurat_nonneuro <- ScaleData(seurat_nonneuro, features = all.genes, assay = "RNA")
+seurat_nonneuro <- SCTransform(seurat_nonneuro, verbose = TRUE, return.only.var.genes = FALSE,assay = "RNA", n_genes = NULL, variable.features.n = NULL)
+
+seurat_all <- NormalizeData(seurat_all, normalization.method = "LogNormalize", scale.factor = 10000, assay = "RNA")
+seurat_all <- ScaleData(seurat_all, features = all.genes, assay = "RNA")
+seurat_all <- SCTransform(seurat_all, verbose = TRUE, return.only.var.genes = FALSE,assay = "RNA", n_genes = NULL, variable.features.n = NULL)
+```
+
+save the normalized seurats
+```{r, eval = FALSE}
+saveRDS(seurat_neuro,"seurat_neuro_SCtransform_soupX.rds")
+saveRDS(seurat_nonneuro,"seurat_non-neuro_SCtransform_soupX.rds")
+saveRDS(seurat_all,"seurat_all_SCtransform_soupX.rds")
+```
+
+load the normalized seurats
+```{r, eval = FALSE}
+seurat_neuro <- readRDS("seurat_neuro_SCtransform_soupX.rds")
+seurat_non-neuro <- readRDS("seurat_non-neuro_SCtransform_soupX.rds")
+seurat_all <- readRDS("seurat_all_SCtransform_soupX.rds")
+```
+
+Canonical markers
+```{r}
+features_test <- c("Pecam1","Flt1",                         # Endothelial
+                   "Pdgfrb",                                # Pericytes
+                   "Ptgds","Mgp","Slc47a1",                 # VLMC
+                   "Ccdc153","Foxj1",                       # Ependymal cells
+                   "Aqp4","Aldh1l1","Atp1b2","Slc1a3",      # ASTRO
+                   "Gfap",                                  # Reactive ASTRO
+                   "Mbp","Mobp","Cldn11",                   # OLIGO
+                   "Pdgfra","Cspg4","Vcan",                 # OPC 
+                   "Cx3cr1","Csf1r",                        # MG
+                   "Cd74",                                  # PVM
+                   "Meg3","Rbfox3",                         # Neurons
+                   "Slc17a6","Slc17a7","Nrgn",              # Glutamaergic
+                   "Gad1","Gad2",                           # GABAergic
+                   "Dcx","Sp9","Ccnd2","Sox4","Stmn1"       # Neuroblasts https://www.sciencedirect.com/science/article/pii/S1934590920303441
+                   )
+```
+
+```{r Dotplot of canonical markers,  echo=FALSE, fig.height=6, fig.width = 6.2}
+DotPlot(seurat_all, features = features_test) + theme(axis.text.x=element_text(angle=90, hjust = 1, vjust = 0.5))
+```
+
+Dimensionality reduction
+```{r, eval = FALSE}
+seurat_neuro <- RunPCA(seurat_neuro,
+                       assay = "SCT",
+                       features = all.genes,
+                       npcs = 50, verbose = FALSE,
+                       reduction.name = "pca")
+
+seurat_nonneuro <- RunPCA(seurat_nonneuro,
+                       assay = "SCT",
+                       features = all.genes,
+                       npcs = 50, verbose = FALSE,
+                       reduction.name = "pca")
+```
+
+save after dimred
+```{r, eval = FALSE}
+saveRDS(seurat_neuro,"seurat_neuro_PCA_soupX.rds")
+saveRDS(seurat_nonneuro,"seurat_non-neuro_PCA_soupX.rds")
+```
+
+load after dimred
+```{r, eval = TRUE}
+seurat_neuro <- readRDS("seurat_neuro_PCA_soupX.rds")
+seurat_nonneuro <- readRDS("seurat_non-neuro_PCA_soupX.rds")
+```
+
+```{r elbow plot}
+ElbowPlot(seurat_neuro, ndims = 50)
+ElbowPlot(seurat_nonneuro, ndims = 50)
+```
+
+UMAP and clustering
+```{r UMAP, eval = FALSE}
+DefaultAssay(seurat_neuro) <- "SCT"
+seurat_neuro <- RunUMAP(seurat_neuro, reduction = "pca", dims = NULL, verbose = TRUE, features = rownames(seurat_neuro))
+seurat_neuro <- FindNeighbors(seurat_neuro, reduction = "pca", dims = 1:50, verbose = TRUE)
+seurat_neuro <- FindClusters(seurat_neuro, resolution = 0.5, verbose = TRUE)
+
+DefaultAssay(seurat_neuro) <- "SCT"
+seurat_nonneuro <- RunUMAP(seurat_nonneuro, reduction = "pca", dims = NULL, verbose = TRUE, features = rownames(seurat_nonneuro))
+seurat_nonneuro <- FindNeighbors(seurat_nonneuro, reduction = "pca", dims = 1:40, verbose = TRUE)
+seurat_nonneuro <- FindClusters(seurat_nonneuro, resolution = 0.5, verbose = TRUE)
+```
+
+save after clustering
+```{r, eval = FALSE}
+saveRDS(seurat_neuro,"seurat_neuro_UMAP_soupX.rds")
+saveRDS(seurat_nonneuro,"seurat_non-neuro_UMAP_soupX.rds")
+```
+
+read after clustering
+```{r, eval = TRUE}
+seurat_neuro <- readRDS("seurat_neuro_UMAP_soupX.rds")
+seurat_nonneuro <- readRDS("seurat_non-neuro_UMAP_soupX.rds")
+```
+
+UMAPs
+```{r pictures_plot1, messages = FALSE, fig.width = 6, fig.height = 6}
+DimPlot(seurat_neuro, reduction = "umap", label = TRUE)
+DimPlot(seurat_neuro, reduction = "umap", label = FALSE, group.by = "seurat_clusters")
+DimPlot(seurat_neuro, reduction = "umap", label = FALSE, group.by = "Sample")
+DimPlot(seurat_neuro, reduction = "umap", label = FALSE, group.by = "cell_type_1", cols = col_vector)
+
+DimPlot(seurat_nonneuro, reduction = "umap", label = TRUE)
+DimPlot(seurat_nonneuro, reduction = "umap", label = FALSE, group.by = "seurat_clusters")
+DimPlot(seurat_nonneuro, reduction = "umap", label = FALSE, group.by = "Sample")
+DimPlot(seurat_nonneuro, reduction = "umap", label = FALSE, group.by = "cell_type_1", cols = col_vector)
+```
+
+UMAPs, split by samples
+```{r pictures_plot2, messages = FALSE, fig.width = 12, fig.height = 6}
+DimPlot(seurat_neuro, reduction = "umap", label = FALSE, group.by = "cell_type_1", split.by = "Sample")
+DimPlot(seurat_neuro, reduction = "umap", label = TRUE, group.by = "cell_type_1", split.by = "Sample")
+
+DimPlot(seurat_nonneuro, reduction = "umap", label = FALSE, group.by = "cell_type_1", cols = colors, split.by = "Sample")
+DimPlot(seurat_nonneuro, reduction = "umap", label = TRUE, group.by = "cell_type_1", cols = colors, split.by = "Sample")
+```
+
+Cell type proportions
+```{r}
+ids <- unique(seurat_nonneuro@meta.data$Sample)
+categories <- unique(seurat_nonneuro@meta.data$seurat_clusters)
+counts <- matrix(nrow=length(ids), ncol=length(categories))
+rownames(counts) <- ids
+colnames(counts) <- categories
+
+for (i in seq_along(ids)) {
+  for (j in seq_along(categories)) {
+    count <- seurat_nonneuro@meta.data %>%
+      filter(Sample == ids[i], seurat_clusters == categories[j]) %>%
+      nrow()
+
+    counts[i, j] <- count
+  }
+}
+
+counts <- counts[, order(as.numeric(colnames(counts)))]
+counts <- counts/rowSums(counts)
+counts_mm_1 <- melt(counts, id = "rownames")
+
+ggplot(data = counts_mm_1, aes(x = as.factor(Var2), y = value, fill = Var1)) + 
+  geom_col(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylab('Proportion of cells') +
+  xlab("")
+
+
+counts <- t(counts)
+counts <- counts/(rowSums(counts)/4)
+counts <- t(counts)
+counts_mm_2 <- melt(counts, id = "rownames")
+
+ggplot(data = counts_mm_2, aes(x = as.factor(Var2), y = value, fill = Var1)) + 
+  geom_col(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylab('Relative proportion of cells') +
+  xlab("")
+```
+
+```{r}
+ggplot(data=seurat_nonneuro@meta.data, aes(seurat_clusters)) +
+  geom_bar(aes(fill=cell_type_1), position="fill") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) +
+  ylab('Proportion of cells')
+
+ggplot(data=seurat_nonneuro@meta.data, aes(cell_type_1)) +
+  geom_bar(aes(fill=seurat_clusters), position="fill") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) +
+  ylab('Proportion of cells')
+
+ggplot(data=seurat_nonneuro@meta.data, aes(seurat_clusters)) +
+  geom_bar(aes(fill=Doublet), position="fill") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) +
+  ylab('Proportion of cells')
+```
+
+
+=== Seurat non-neuro datasets ===
+
+read the seurat
+```{r read}
+seurat_nonneuro <- readRDS("seurat_non-neuro_UMAP_soupX.rds")
+```
+
+Canonical markers
+```{r}
+features_test <- c("Pecam1","Flt1",                         # Endothelial
+                   "Pdgfrb",                                # Pericytes
+                   "Ptgds","Mgp","Slc47a1",                 # VLMC
+                   "Ccdc153","Foxj1",                       # Ependymal cells
+                   "Aqp4","Aldh1l1","Atp1b2","Slc1a3",      # ASTRO
+                   "Gfap",                                  # Reactive ASTRO
+                   "Mbp","Mobp","Cldn11",                   # OLIGO
+                   "Pdgfra","Cspg4","Vcan",                 # OPC 
+                   "Cx3cr1","Csf1r",                        # MG
+                   "Cd74",                                  # PVM
+                   "Meg3","Rbfox3",                         # Neurons
+                   "Slc17a6","Slc17a7","Nrgn",              # Glutamaergic
+                   "Gad1","Gad2",                           # GABAergic
+                   "Dcx","Sp9","Ccnd2","Sox4","Stmn1"       # Neuroblasts https://www.sciencedirect.com/science/article/pii/S1934590920303441
+                   )
+```
+
+```{r reordering the populations, echo=FALSE, fig.height=6, fig.width = 8}
+seurat_nonneuro@active.ident <- factor(seurat_nonneuro@active.ident,
+                               levels = c("4","6","15","8","12","17","2","7","10","16","9","0","5","11","14","3","1","13"))
+DotPlot(seurat_nonneuro, features = features_test) + theme(axis.text.x=element_text(angle=90, hjust = 1, vjust = 0.5)) + xlab("")
+```
+
+
+Annotated 
+0 - OLIGO
+1 - MG
+2 - ASTRO
+3 - OPC
+4 - bordel
+5 - OLIGO
+6 - Endo/PER/VLMC
+7 - ASTRO
+8 - Endo/PER/VLMC
+9 - OLIGO
+10 - ASTRO/OLIGO
+11 - OLIGO
+12 - EPEN
+13 - Gaba/Oligo/ASTRO
+14 - OLIGO
+15 - Endo/PER/VLMC
+16 - ASTRO/OLIGO
+17 - ASTRO ?
+
+=== Astroependymal populations ===
+
+Subset for astro populations, normalize and PCA.
+```{r message=FALSE, warning=FALSE}
+seurat_ASTRO <- subset(seurat_nonneuro, subset = seurat_clusters %in% c("2","7","10","4","13","12","17"))
+seurat_ASTRO$Cluster2 <- as.factor(Idents(seurat_ASTRO))
+DefaultAssay(seurat_ASTRO) <- "RNA"
+
+all.genes <- rownames(seurat_ASTRO)
+seurat_ASTRO <- NormalizeData(seurat_ASTRO, normalization.method = "LogNormalize", scale.factor = 10000, assay = "RNA")
+seurat_ASTRO <- ScaleData(seurat_ASTRO, features = all.genes, assay = "RNA")
+seurat_ASTRO <- SCTransform(seurat_ASTRO, verbose = TRUE, return.only.var.genes = FALSE,assay = "RNA", n_genes = NULL, variable.features.n = NULL)
+
+seurat_ASTRO <- RunPCA(seurat_ASTRO,
+                       assay = "SCT",
+                       features = all.genes,
+                       npcs = 50, verbose = FALSE,
+                       reduction.name = "pca")
+```
+
+save after pca
+```{r, eval = FALSE}
+saveRDS(seurat_ASTRO,"seurat_ASTRO_PCA_soupX.rds")
+```
+read after pca
+```{r, eval = FALSE}
+seurat_ASTRO <- readRDS("seurat_ASTRO_PCA_soupX.rds")
+```
+
+```{r elbow plot}
+ElbowPlot(seurat_ASTRO, ndims = 50)
+```
+
+UMAP and clustering at a range of resolutions
+```{r message=FALSE, warning=FALSE}
+seurat_ASTRO <- RunUMAP(seurat_ASTRO, reduction = "pca", dims = NULL, verbose = TRUE, features = rownames(seurat_ASTRO), seed.use = 1902)
+seurat_ASTRO <- FindNeighbors(seurat_ASTRO, reduction = "pca", dims = 1:30, verbose = TRUE)
+seurat_ASTRO@meta.data <- seurat_ASTRO@meta.data[,substr(colnames(seurat_ASTRO@meta.data),1,11) != "SCT_snn_res"]
+for(i in 1:10){
+  seurat_ASTRO <- FindClusters(seurat_ASTRO, resolution = i*0.1, verbose = FALSE)
+}
+```
+
+save after clustering
+```{r eval=FALSE}
+saveRDS(seurat_ASTRO,"seurat_ASTRO_clustree_soupX.rds")
+```
+
+read after clustering
+```{r eval=TRUE}
+seurat_ASTRO <- readRDS("seurat_ASTRO_clustree_soupX.rds")
+```
+
+Clustree for the transitions between the clusters
+```{r, fig.height=12, fig.width=8}
+clustree(seurat_ASTRO, prefix = "SCT_snn_res.")
+```
+
+Defined resolution = 0.6
+```{r clustering resolution selected}
+seurat_ASTRO@meta.data <- seurat_ASTRO@meta.data[,substr(colnames(seurat_ASTRO@meta.data),1,11) != "SCT_snn_res"]
+seurat_ASTRO <- FindClusters(seurat_ASTRO, resolution = 0.6, verbose = FALSE)
+seurat_ASTRO$cell_type_2 <- Idents(seurat_ASTRO)
+levels(seurat_ASTRO$cell_type_2) <- paste0("ASTRO_",as.numeric(levels(seurat_ASTRO$cell_type_2))+1)
+```
+
+save after clustering
+```{r eval=FALSE}
+saveRDS(seurat_ASTRO,"seurat_ASTRO_clusters_soupX.rds")
+```
+
+read after clustering
+```{r eval=TRUE}
+seurat_ASTRO <- readRDS("seurat_ASTRO_clusters_soupX.rds")
+```
+
+UMAPs
+```{r pictures_plot5, messages = FALSE, fig.width = 9, fig.height = 6}
+DimPlot(seurat_ASTRO, reduction = "umap", label = FALSE, group.by = "Sample")
+DimPlot(seurat_ASTRO, reduction = "umap", label = TRUE, group.by = "cell_type_1", cols = col_vector)
+DimPlot(seurat_ASTRO, reduction = "umap", label = TRUE, group.by = "Cluster2")
+DimPlot(seurat_ASTRO, reduction = "umap", label = TRUE, group.by = "cell_type_2", cols = col_vector)
+DimPlot(seurat_ASTRO, reduction = "umap", label = FALSE, group.by = "cell_type_2", split.by = "Sample")
+DimPlot(seurat_ASTRO, reduction = "umap", label = FALSE, group.by = "Phase")
+```
+
+QC checks
+```{r pictures_plot6, messages = FALSE, fig.width = 9, fig.height = 4}
+VlnPlot(seurat_ASTRO, features = "Gfap", group.by = "cell_type_2", split.by = "Sample") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+FeaturePlot(seurat_ASTRO, features = "Gfap", min.cutoff = "q20", max.cutoff = "q80")
+VlnPlot(seurat_ASTRO, features = "Vim", group.by = "cell_type_2")
+
+FeaturePlot(seurat_ASTRO, features = "percent.mt", min.cutoff = "q1", max.cutoff = "q99", cols = c("gray","darkgreen","red"), pt.size = 1.0)
+VlnPlot(seurat_ASTRO, features = "nFeature_RNA", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+VlnPlot(seurat_ASTRO, features = "nCount_RNA", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+VlnPlot(seurat_ASTRO, features = "percent.mt", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+VlnPlot(seurat_ASTRO, features = "percent.rib", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+Predicting brain region origin for astro
+
+load the Zeisel mouse brain atlas for astrocytes
+```{r eval=FALSE}
+mouse_brain_ASTRO <- readRDS("mouse_brain_ASTRO.rds")
+```
+
+A brief look at the ref dataset
+```{r}
+DimPlot(mouse_brain_ASTRO, group.by = "Region", label = TRUE) + NoLegend()
+DimPlot(mouse_brain_ASTRO, group.by = "ClusterName", label = TRUE) + NoLegend()
+```
+
+Predicting the astro brain region origins
+```{r eval = FALSE}
+anchors <- FindTransferAnchors(reference = mouse_brain_ASTRO, query = seurat_ASTRO, normalization.method = "SCT")
+predictions.assay <- TransferData(anchorset = anchors, refdata = mouse_brain_ASTRO$Region, prediction.assay = TRUE, dims = 1:20)
+seurat_ASTRO[["prediction_ASTRO_region"]] <- predictions.assay
+
+DefaultAssay(seurat_ASTRO) <- "prediction_ASTRO_region"
+```
+
+```{r Brain region projections}
+DimPlot(seurat_ASTRO, group.by = "cell_type_2", label = TRUE)
+
+FeaturePlot(seurat_ASTRO, features = c("Telencephalon"), pt.size = 1.5, cols = c("gray","darkgreen","red"))
+VlnPlot(seurat_ASTRO, features = c("Telencephalon"), group.by = "cell_type_2")
+
+FeaturePlot(seurat_ASTRO, features = c("Hypothalamus,Thalamus,Midbrain dorsal,Midbrain ventral,Pons,Medulla,Spinal cord"), pt.size = 1.5, cols = c("gray","darkgreen","red"))
+VlnPlot(seurat_ASTRO, features = c("Hypothalamus,Thalamus,Midbrain dorsal,Midbrain ventral,Pons,Medulla,Spinal cord"), group.by = "cell_type_2")
+```
+
+Renaming the clusters
+```{r naming the clusters}
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_1"] <- "ASTRO_TE"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_2"] <- "mix"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_3"] <- "ASTRO_DE"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_4"] <- "reactive Astro"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_5"] <- "progenitor Astro"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_6"] <- "EPEN"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_7"] <- "NB"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_8"] <- "CHORO"
+levels(seurat_ASTRO$cell_type_2)[levels(seurat_ASTRO$cell_type_2) == "ASTRO_9"] <- "mix"
+```
+
+Saving the seurat, which is later used as an input in the "MCAO_scsn.Rmd".
+```{r eval=FALSE}
+saveRDS(seurat_ASTRO,"seurat_ASTRO_names_soupX.rds")
+```
+
+=== Microglial populations === 
+
+Subset for microglial population, normalize and run PCA.
+```{r message=FALSE, warning=FALSE}
+seurat_MG <- subset(seurat_nonneuro, subset = seurat_clusters %in% c("1"))
+seurat_MG$Cluster2 <- as.factor(Idents(seurat_MG))
+DefaultAssay(seurat_MG) <- "RNA"
+
+all.genes <- rownames(seurat_MG)
+seurat_MG <- NormalizeData(seurat_MG, normalization.method = "LogNormalize", scale.factor = 10000, assay = "RNA")
+seurat_MG <- ScaleData(seurat_MG, features = all.genes, assay = "RNA")
+seurat_MG <- SCTransform(seurat_MG, verbose = TRUE, return.only.var.genes = FALSE,assay = "RNA", n_genes = NULL, variable.features.n = NULL)
+
+seurat_MG <- RunPCA(seurat_MG,
+                       assay = "SCT",
+                       features = all.genes,
+                       npcs = 50, verbose = FALSE,
+                       reduction.name = "pca")
+```
+
+save the post-pca seurat
+```{r save, eval = FALSE}
+saveRDS(seurat_MG,"seurat_MG_PCA_soupX.rds")
+```
+
+read the seurat
+```{r read, eval = FALSE}
+seurat_MG <- readRDS("seurat_MG_PCA_soupX.rds")
+```
+
+```{r elbow plot}
+ElbowPlot(seurat_MG, ndims = 50)
+```
+
+UMAP and clustering for a resolution range
+```{r umap and clustering, message=FALSE, warning=FALSE}
+seurat_MG <- RunUMAP(seurat_MG, reduction = "pca", dims = NULL, verbose = TRUE, features = rownames(seurat_MG), seed.use = 1902)
+seurat_MG <- FindNeighbors(seurat_MG, reduction = "pca", dims = 1:20, verbose = TRUE)
+seurat_MG@meta.data <- seurat_MG@meta.data[,substr(colnames(seurat_MG@meta.data),1,11) != "SCT_snn_res"]
+for(i in 1:10){
+  seurat_MG <- FindClusters(seurat_MG, resolution = i*0.1, verbose = FALSE)
+}
+```
+
+save the post-clustering seurat
+```{r save, eval=FALSE}
+saveRDS(seurat_MG,"seurat_MG_clustree_soupX.rds")
+```
+
+read the post-clustering mg seurat
+```{r read post-clustering mg, eval=TRUE}
+seurat_MG <- readRDS("seurat_MG_clustree_soupX.rds")
+```
+
+```{r clustree, fig.height=12, fig.width=8}
+clustree(seurat_MG, prefix = "SCT_snn_res.")
+```
+
+selected resolution = 0.6
+```{r clustering resolution}
+seurat_MG@meta.data <- seurat_MG@meta.data[,substr(colnames(seurat_MG@meta.data),1,11) != "SCT_snn_res"]
+seurat_MG <- FindClusters(seurat_MG, resolution = 0.6, verbose = FALSE)
+seurat_MG$cell_type_2 <- Idents(seurat_MG)
+levels(seurat_MG$cell_type_2) <- paste0("MG_",as.numeric(levels(seurat_MG$cell_type_2))+1)
+```
+
+```{r save seurat, eval=FALSE}
+saveRDS(seurat_MG,"seurat_MG_clusters_soupX.rds")
+```
+
+```{r read seurat, eval=TRUE}
+seurat_MG <- readRDS("seurat_MG_clusters_soupX.rds")
+```
+
+UMAPs
+```{r pictures_plot5, messages = FALSE, fig.width = 9, fig.height = 6}
+DimPlot(seurat_MG, reduction = "umap", label = FALSE, group.by = "Sample")
+DimPlot(seurat_MG, reduction = "umap", label = TRUE, group.by = "cell_type_1", cols = col_vector)
+DimPlot(seurat_MG, reduction = "umap", label = TRUE, group.by = "Cluster2")
+DimPlot(seurat_MG, reduction = "umap", label = TRUE, group.by = "cell_type_2", cols = col_vector)
+DimPlot(seurat_MG, reduction = "umap", label = FALSE, group.by = "cell_type_2", split.by = "Sample")
+DimPlot(seurat_MG, reduction = "umap", label = FALSE, group.by = "Phase")
+```
+
+QC check
+```{r pictures_plot6, messages = FALSE, fig.width = 9, fig.height = 4}
+FeaturePlot(seurat_MG, features = "percent.mt", min.cutoff = "q1", max.cutoff = "q99", cols = c("gray","darkgreen"), pt.size = 1.0)
+VlnPlot(seurat_MG, features = "nFeature_RNA", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+VlnPlot(seurat_MG, features = "nCount_RNA", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+VlnPlot(seurat_MG, features = "percent.mt", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+VlnPlot(seurat_MG, features = "percent.rib", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+```
+
+Markers
+```{r Markers, eval = FALSE}
+DefaultAssay(seurat_MG) <- "SCT"
+Idents(seurat_MG) <- seurat_MG$cell_type_2
+markers <- FindAllMarkers(seurat_MG, min.pct = 0.25, only.pos = TRUE, verbose = TRUE, assay = "SCT")
+```
+
+top markers
+```{r top markers}
+datatable(markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC))
+```
+
+Gene of interest check
+```{r gene of interest check}
+gi = "Arhgap24"
+VlnPlot(seurat_nonneuro, features = gi, group.by = "cell_type_1") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+VlnPlot(seurat_neuro, features = gi, group.by = "cell_type_1") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+VlnPlot(seurat_MG, features = gi, group.by = "cell_type_2") + NoLegend()
+FeaturePlot(seurat_MG,features = gi, min.cutoff = "q10", max.cutoff = "q90")
+FeaturePlot(seurat_nonneuro, features = gi, reduction = "umap", label = FALSE, min.cutoff = "q10", max.cutoff = "q90")
+SpatialPlot(spatial, features = gi, pt.size.factor = 3, image.alpha = 0.2, alpha=c(0,40))
+```
+
+Level 2 annotation
+```{r level2 annotation}
+levels(seurat_MG$cell_type_2)[levels(seurat_MG$cell_type_2) == "MG_1"] <- "homeostatic"
+levels(seurat_MG$cell_type_2)[levels(seurat_MG$cell_type_2) == "MG_2"] <- "TAM"
+levels(seurat_MG$cell_type_2)[levels(seurat_MG$cell_type_2) == "MG_3"] <- "debris"
+```
+
+UMAPs with level 2 annotation
+```{r pictures_plot7, messages = FALSE, fig.width = 6, fig.height = 6}
+DimPlot(seurat_MG, reduction = "umap", label = FALSE, group.by = "Sample")
+DimPlot(seurat_MG, reduction = "umap", label = TRUE, group.by = "cell_type_2")
+DimPlot(seurat_MG, reduction = "umap", label = FALSE, group.by = "cell_type_2", split.by = "Sample")
+```
+
+Saving the MG seurat, used as input in the "MCAO_scsn.Rmd"
+```{r saving the MG seurat,  eval=FALSE}
+saveRDS(seurat_MG,"seurat_MG_names_soupX.rds")
+```
+
+=== Oligodendrocytes === 
+
+## single-nucleus only
+
+Subset for oligodendro-lineage populations, normalize and pca.
+```{r OL dimred,  message=FALSE, warning=FALSE}
+seurat_OLIGO <- subset(seurat_nonneuro, subset = seurat_clusters %in% c("0","16","9","5","11","14","3"))
+seurat_OLIGO$Cluster2 <- as.factor(Idents(seurat_OLIGO))
+DefaultAssay(seurat_OLIGO) <- "RNA"
+
+all.genes <- rownames(seurat_OLIGO)
+seurat_OLIGO <- NormalizeData(seurat_OLIGO, normalization.method = "LogNormalize", scale.factor = 10000, assay = "RNA")
+seurat_OLIGO <- ScaleData(seurat_OLIGO, features = all.genes, assay = "RNA")
+seurat_OLIGO <- SCTransform(seurat_OLIGO, verbose = TRUE, return.only.var.genes = FALSE,assay = "RNA", n_genes = NULL, variable.features.n = NULL)
+
+seurat_OLIGO <- RunPCA(seurat_OLIGO,
+                       assay = "SCT",
+                       features = all.genes,
+                       npcs = 50, verbose = FALSE,
+                       reduction.name = "pca")
+```
+
+save the seurat
+```{r save, eval = FALSE}
+saveRDS(seurat_OLIGO,"seurat_OLIGO_PCA_soupX.rds")
+```
+
+read the seurat
+```{r read, eval = FALSE}
+seurat_OLIGO <- readRDS("seurat_OLIGO_PCA_soupX.rds")
+```
+
+```{r elbowplot}
+ElbowPlot(seurat_OLIGO, ndims = 50)
+```
+
+UMAP and clustering
+```{r Umap and clustering, message=FALSE, warning=FALSE}
+seurat_OLIGO <- RunUMAP(seurat_OLIGO, reduction = "pca", dims = NULL, verbose = TRUE, features = rownames(seurat_OLIGO), seed.use = 1902)
+seurat_OLIGO <- FindNeighbors(seurat_OLIGO, reduction = "pca", dims = 1:20, verbose = TRUE)
+seurat_OLIGO@meta.data <- seurat_OLIGO@meta.data[,substr(colnames(seurat_OLIGO@meta.data),1,11) != "SCT_snn_res"]
+for(i in 1:10){
+  seurat_OLIGO <- FindClusters(seurat_OLIGO, resolution = i*0.1, verbose = FALSE)
+}
+```
+
+```{r saverds, eval=FALSE}
+saveRDS(seurat_OLIGO,"seurat_OLIGO_clustree_soupX.rds")
+```
+
+```{r readrds, eval=TRUE}
+seurat_OLIGO <- readRDS("seurat_OLIGO_clustree_soupX.rds")
+```
+
+```{r clustree, fig.height=12, fig.width=8}
+clustree(seurat_OLIGO, prefix = "SCT_snn_res.")
+```
+
+selected resolution = 0.4
+```{r clustering resolution}
+seurat_OLIGO@meta.data <- seurat_OLIGO@meta.data[,substr(colnames(seurat_OLIGO@meta.data),1,11) != "SCT_snn_res"]
+seurat_OLIGO <- FindClusters(seurat_OLIGO, resolution = 0.4, verbose = FALSE)
+seurat_OLIGO$cell_type_2 <- Idents(seurat_OLIGO)
+levels(seurat_OLIGO$cell_type_2) <- paste0("OLIGO_",as.numeric(levels(seurat_OLIGO$cell_type_2))+1)
+```
+
+```{r saverds, eval=FALSE}
+saveRDS(seurat_OLIGO,"seurat_OLIGO_clusters_soupX.rds")
+```
+
+```{r readrds, eval=TRUE}
+seurat_OLIGO <- readRDS("seurat_OLIGO_clusters_soupX.rds")
+```
+
+UMAPs
+```{r pictures_plot5, messages = FALSE, fig.width = 9, fig.height = 6}
+DimPlot(seurat_OLIGO, reduction = "umap", label = FALSE, group.by = "Sample")
+DimPlot(seurat_OLIGO, reduction = "umap", label = TRUE, group.by = "cell_type_1", cols = col_vector)
+DimPlot(seurat_OLIGO, reduction = "umap", label = TRUE, group.by = "Cluster2")
+DimPlot(seurat_OLIGO, reduction = "umap", label = TRUE, group.by = "cell_type_2", cols = col_vector)
+DimPlot(seurat_OLIGO, reduction = "umap", label = FALSE, group.by = "cell_type_2", split.by = "Sample")
+DimPlot(seurat_OLIGO, reduction = "umap", label = FALSE, group.by = "Phase")
+```
+
+Quick QC
+```{r pictures_plot6, messages = FALSE, fig.width = 9, fig.height = 4}
+FeaturePlot(seurat_OLIGO, features = "percent.mt", min.cutoff = "q1", max.cutoff = "q99", cols = c("gray","darkgreen"), pt.size = 1.0)
+VlnPlot(seurat_OLIGO, features = "nFeature_RNA", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+VlnPlot(seurat_OLIGO, features = "nCount_RNA", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+VlnPlot(seurat_OLIGO, features = "percent.mt", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+VlnPlot(seurat_OLIGO, features = "percent.rib", group.by = "cell_type_2", pt.size = 0.01) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + NoLegend()
+```
+
+MG markers
+```{r Markers_Identification, eval = FALSE}
+DefaultAssay(seurat_OLIGO) <- "SCT"
+Idents(seurat_OLIGO) <- seurat_OLIGO$cell_type_2
+markers <- FindAllMarkers(seurat_OLIGO, min.pct = 0.25, only.pos = TRUE, verbose = TRUE, assay = "SCT")
+```
+
+top markers
+```{r top markers}
+datatable(markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC))
+```
+
+Gene of interest plot
+```{r gene of interest}
+gi = "Otud7a"
+VlnPlot(seurat_nonneuro, features = gi, group.by = "cell_type_1") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+VlnPlot(seurat_neuro, features = gi, group.by = "cell_type_1") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+VlnPlot(seurat_OLIGO, features = gi, group.by = "cell_type_2") + NoLegend()
+FeaturePlot(seurat_OLIGO,features = gi, min.cutoff = "q10", max.cutoff = "q90")
+FeaturePlot(seurat_nonneuro, features = gi, reduction = "umap", label = FALSE, min.cutoff = "q10", max.cutoff = "q90")
+```
+
+Canonical markers
+```{r canonical markers}
+features_test <- c("Cspg4","Pdgfra","Emid1",   # OPC
+                   "Neu4","Sox6","Tns3","Fyn", # COP
+                   "Tcf7l2",                   # NFOL
+                   "Opalin","Serinc5","Plp1",  # MFOL
+                   "Apod","Klk6"               # MOL
+                   )
+```
+
+dotplot
+```{r dotplot, echo=FALSE, fig.height=4, fig.width = 9}
+#Idents(seurat_OLIGO) <- seurat_OLIGO$cell_type_2
+DotPlot(seurat_OLIGO, features = features_test, group.by = "cell_type_2") + theme(axis.text.x=element_text(angle=90, hjust = 1, vjust = 0.5))
+```
+
+annotating the OL clusters
+```{r OL cluster annotation}
+seurat_OLIGO$cell_type_2 <- factor(seurat_OLIGO$cell_type_2,
+                               levels = c("OLIGO_2","OLIGO_4","OLIGO_1","OLIGO_3","OLIGO_5","OLIGO_6","OLIGO_7"))
+
+levels(seurat_OLIGO$cell_type_2)[levels(seurat_OLIGO$cell_type_2) == "OLIGO_1"] <- "MFOL+MOL"
+levels(seurat_OLIGO$cell_type_2)[levels(seurat_OLIGO$cell_type_2) == "OLIGO_2"] <- "OPC"
+levels(seurat_OLIGO$cell_type_2)[levels(seurat_OLIGO$cell_type_2) == "OLIGO_3"] <- "MOL"
+levels(seurat_OLIGO$cell_type_2)[levels(seurat_OLIGO$cell_type_2) == "OLIGO_4"] <- "COP+NFOL"
+levels(seurat_OLIGO$cell_type_2)[levels(seurat_OLIGO$cell_type_2) == "OLIGO_5"] <- "Fast response OLIGO"
+levels(seurat_OLIGO$cell_type_2)[levels(seurat_OLIGO$cell_type_2) == "OLIGO_6"] <- "IAO"
+levels(seurat_OLIGO$cell_type_2)[levels(seurat_OLIGO$cell_type_2) == "OLIGO_7"] <- "dead"
+```
+
+UMAPs
+```{r pictures_plot7, messages = FALSE, fig.width = 6, fig.height = 6}
+DimPlot(seurat_OLIGO, reduction = "umap", label = FALSE, group.by = "Sample")
+DimPlot(seurat_OLIGO, reduction = "umap", label = TRUE, group.by = "cell_type_2")
+DimPlot(seurat_OLIGO, reduction = "umap", label = FALSE, group.by = "cell_type_2", split.by = "Sample")
+```
+
+Saving the sn_OL seurat, used for integration and as input in the "MCAO_scsn.Rmd".
+```{r save rds,  eval=FALSE}
+saveRDS(seurat_OLIGO,"seurat_OLIGO_names_soupX.rds")
+```
+

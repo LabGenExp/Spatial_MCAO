@@ -35,14 +35,17 @@ library(UpSetR)
 # plotting
 library(ggrepel)
 
+
+
 # sourcing custom functions and color palettes
 source("code/supporting_functions_MCAO.R")
+tidyverse_priority()
 ```
 
 ```{r working space and lists}
 # ws
-if(!dir.exists("ws")){dir.create("ws")
-  ws <- "ws"}else{ws <- "ws"}
+if(!dir.exists("results/PNAS/Fig01")){dir.create("results/PNAS/Fig01")
+  ws <- "results/PNAS/Fig01"}else{ws <- "results/PNAS/Fig01"}
 
 # lists
 plot.list <- list()
@@ -56,7 +59,7 @@ spatial.seurat <- readRDS(file = "data/seurat_spatial_integrated_ready.Rds")
 DefaultAssay(spatial.seurat) <- "Spatial"
 
 # list of differentially expressed genes.
-markers <- read_all_sheets(file = file.path(ws, "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx"))
+markers <- read_all_sheets(file = file.path("ws", "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx"))
 
 # misc 
 sections <- c("Ctrl", "1DPI", "3DPI", "7DPI")
@@ -120,11 +123,127 @@ print(plot.list[["Barplot_MRI"]])
 # load the 3D MRI images
 
 ## use magick to load the compressed bmp file
-plot.list[["MRI_3D"]] <- magick::image_read(file.path(ws, "MontageAnimal03_512sB.bmp")) %>% as.raster() %>% rasterGrob()
+plot.list[["MRI_3D"]] <- magick::image_read(file.path("ws", "MontageAnimal03_512sB.bmp")) %>% as.raster() %>% rasterGrob()
 
 plot.list[["MRI"]] <- wrap_plots(plot.list[c("MRI_3D", "Barplot_MRI")], 
                                  ncol = 4, design = "AAAB", )
 print(plot.list[["MRI"]])
+
+png_save_show(plot = plot.list[["MRI"]], 
+              file = file.path(ws, "MRI.png"), 
+              dpi = 1000, 
+              height = 70)
+
+
+```
+
+Overlap with ABA markers
+```{r Overlap regional markers with ABA}
+# our markers and region names
+ctrl_markers <- read_all_sheets(file.path("data", "SupplementaryTable1_ControlSection_Markers_plusABA.xlsx"))
+
+if(exists("ctrl_markers")){
+  Seurat_regions <- 
+    spatial.seurat@meta.data %>% 
+    dplyr::select(DetailedIntAnno, DetailedRegionAnnoShort) %>% 
+    unique %>% 
+    mutate(RegionAnnotation = recode(DetailedIntAnno, 
+                                     "Isocortex L2/3/4" = "Isocortex L1-4", 
+                                     "Isocortex L1" = "Isocortex L1-4", 
+                                     "Amygdalar area" = "Amygdalar nuclei")) %>% 
+    unique
+}
+
+# read in the ABA region names and modify them to match with our short annotation
+ABA_files <- list.files(file.path("data", "Metadata", "ABA regional markers", "genes"))
+ABA_regions <- 
+  ABA_files %>% 
+  stringr::str_remove_all("ABAmarkers_|.txt")
+
+# retrieve the ABA gene lists  
+ABA_list <-
+  mapply(\(aba_names, aba_files) {
+    list_of_genes <-
+      scan(
+        file = file.path("data", "Metadata", "ABA regional markers", "genes", aba_files),
+        what = character()
+      ) %>%
+      unique() %>%
+      head(100)
+    return(list_of_genes)
+  },
+  ABA_regions,
+  ABA_files,
+  SIMPLIFY = FALSE)
+
+# intersect the comparisons
+if(all(names(ABA_list) %in% names(ctrl_markers))){
+  # get our regional markers
+  region_markers <- 
+    ctrl_markers[names(ABA_list)] %>% 
+    lapply(\(x){x %>% pull(gene) %>% head(100)})
+  
+  # overlap the ABA and our top 100 markers mutually
+  total_overlap <- 
+    purrr::map_dfc(region_markers, \(x) {
+      map_int(ABA_list, ~ length(base::intersect(.x, x)))
+    }) %>% 
+    t() %>% 
+    as.data.frame()
+  
+  rownames(total_overlap) <- paste0("ABA_", names(ABA_list))
+  colnames(total_overlap) <- names(region_markers)
+}
+
+# significance of the overlaps
+selected_genes <- 100
+gene_background <- 18302
+ABA_marker_list_size <- 100
+total_tests <- dim(total_overlap)[1] * dim(total_overlap)[2]
+
+calculate_hypergeometric <- \(overlap) {
+  p_value <- phyper(q = overlap - 1, 
+                    m = selected_genes, 
+                    n = gene_background - selected_genes, 
+                    k = ABA_marker_list_size, 
+                    lower.tail = FALSE)
+  return(p_value)
+}
+
+prob <- total_overlap %>%
+  mutate(across(everything(), ~ calculate_hypergeometric(.))) %>%
+  mutate(across(everything(), ~ p.adjust(., method = 'fdr', n = total_tests))) %>%
+  rownames_to_column(var = "ABA") %>%
+  relocate(ABA, everything())
+  
+# make it into a dotplot
+overlap_long <- 
+  total_overlap %>% 
+  rownames_to_column("ABA") %>% 
+  pivot_longer(-ABA, names_to = "Marker", values_to = "overlap")
+
+plot.list[["Dotplot_DEGoverlap_withABA"]] <- prob %>% 
+  pivot_longer(-ABA, names_to = "Marker", values_to = "p_value") %>% 
+  left_join(overlap_long, by = c("ABA", "Marker")) %>% 
+  ggplot(aes(x = Marker, y = ABA)) + 
+  geom_point(aes(size = overlap, color = -log10(p_value))) + 
+  scale_size_continuous(name = "Overlap Count", range = c(1, 7)) + 
+  scale_color_gradientn(name = "-log10(Padj)", colours = col.list$gradient_grey_to_red) + 
+  theme_mk + 
+  remove_grid + 
+  labs(title = "Overlap of top 100 DEGs") + 
+  xlab("This Study Region DEGs") + 
+  ylab("Allen Brain Atlas") + 
+  theme(legend.position = "right", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+    
+print(plot.list[["Dotplot_DEGoverlap_withABA"]])
+
+png_save_show(plot = plot.list[["Dotplot_DEGoverlap_withABA"]], 
+              file = file.path(ws, "Dotplot_DEGoverlap_withABA.png"), 
+              dpi = 1000, 
+              height = 100, 
+              width = 130)
 ```
 
 Having processed and annotated the data, we can look at their annotation. First at the clusters in the UMAP.
@@ -137,7 +256,7 @@ plot.list[["UMAP_Spatial"]] <- spatial.seurat %>% DimPlot(
   shuffle = T,
   pt.size = 0.35,
   label = T,
-  label.size = 2,
+  label.size = 2.45,
   label.box = T,
   repel = T
 ) +
@@ -149,6 +268,12 @@ plot.list[["UMAP_Spatial"]] <- spatial.seurat %>% DimPlot(
   theme(panel.border = element_blank())
 
 print(plot.list[["UMAP_Spatial"]])
+
+png_save_show(plot = plot.list[["UMAP_Spatial"]], 
+              file = file.path(ws, "UMAP_Spatial.png"), 
+              dpi = 1000, 
+              height = 100, 
+              width = 100)
 ```
 
 And then the spatial layout of the clusters.
@@ -171,6 +296,11 @@ plot.list[["Spatial"]] <- spatial.seurat %>% SpatialPlot(
   theme(panel.border = element_blank())
 
 print(plot.list[["Spatial"]])
+
+png_save_show(plot = plot.list[["Spatial"]], 
+              file = file.path(ws, "Spatial.png"), 
+              dpi = 1000, 
+              height = 70)
 ```
 
 No. of genes present in the cortical areas
@@ -212,6 +342,11 @@ ann_plot <- md %>% ggplot(aes(DetailedRegionAnnoShort, nFeature_Spatial)) +
 
 plot.list[["VlnPlot_nFeature"]] <- (ann_plot / main_plot) + plot_layout(heights = c(1,10))
 print(plot.list[["VlnPlot_nFeature"]])
+png_save_show(plot = plot.list[["VlnPlot_nFeature"]], 
+              file = file.path(ws, "VlnPlot_nFeature.png"), 
+              dpi = 1000, 
+              height = 70, 
+              width = 100)
 
 rm(main_plot, md, ann_plot)
 ```
@@ -264,18 +399,23 @@ temp <- result.list$markers_up %>% lapply(pull, gene)
 plot.list[["UpSet_SpatialMarkers_up"]] <-
   UpSetR::upset(
     fromList(temp[ctx_regions]),
-    sets = ctx_regions %>% rev,
+    sets = ctx_regions %>% rev, 
+    nintersects = 40,
     sets.bar.color = col.list[["cols_mono_short"]][ctx_regions] %>% rev,
     order.by = "freq",
     keep.order = T,
     show.numbers = "yes",
-    mb.ratio = c(0.5, 0.5),
+    mb.ratio = c(0.3, 0.7),
     sets.x.label = "Number of markers",
     mainbar.y.label = "Size of marker overlap",
-    scale.intersections = "identity"
+    scale.intersections = "identity", 
   )
 
 print(plot.list[["UpSet_SpatialMarkers_up"]])
+
+# png(filename = file.path(ws, "UpSet_SpatialMarkers_up.png"), units = "mm", height = 150, width = 150, bg = "transparent", res = 1000)
+# print(plot.list[["UpSet_SpatialMarkers_up"]])
+# dev.off()
 ```
 
 ```{r downregulated markers}
@@ -329,6 +469,3 @@ plot.list[["Fig1"]] %>% ggsave_tiff(ws_location = ws, plotname = "WrapPlot_Figur
 
 
 === Supp Figures ===
-
-Plots with supportive role.
-

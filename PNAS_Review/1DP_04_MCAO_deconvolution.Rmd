@@ -17,7 +17,7 @@ Essential input files:
 === Essential chunks. Always load. ===
 
 ```{r libraries}
-library(Seurat); library(tidyverse); library(ggplot2); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr); library(stringr); library(gridExtra); library(Matrix); library(patchwork)
+library(Seurat); library(tidyverse); library(ggplot2); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr); library(stringr); library(gridExtra); library(Matrix); library(patchwork); library(ggrepel)
 
 # sourcing custom functions and color palettes
 source("code/supporting_functions_MCAO.R")
@@ -746,6 +746,100 @@ spatial.seurat %>% enh_vlnplot(
   ) & NoLegend()
 ```
 
+Correlation of cell types with genes in a time-dependent manner
+```{r correlation cell types and genes}
+gene_cell_correlations <-
+  mapply(\(x) {
+    # cell type df
+    celltype_df <-
+      spatial.seurat@meta.data %>%
+      filter(BrainAreas %in% "Lesion" & Condition %in% x) %>%
+      select(starts_with("RCTD_")) %>%
+      rownames_to_column("Barcode")
+    
+    # expression matrix
+    exp_mat <-
+      spatial.seurat %>%
+      GetAssayData(assay = "Spatial", layer = "data") %>%
+      {
+        .[rowSums(.) > (0.01 * ncol(.)),]
+      } %>% # remove genes with less 1 % positivity
+      t %>%
+      as.data.frame() %>%
+      rownames_to_column("Barcode") %>%
+      filter(Barcode %in% (celltype_df %>% pull(Barcode))) %>%
+      column_to_rownames("Barcode")
+    
+    # correlation
+    cor_matrix <-
+      cor(exp_mat,
+          celltype_df %>% select(-c(Barcode)),
+          method = "pearson") %>%
+      as.data.frame()
+    
+    return(cor_matrix)
+  },
+  c("1DPI", "3DPI", "7DPI"), 
+  SIMPLIFY = FALSE)
+
+
+result.list[["gene_cell_correlations"]] <- gene_cell_correlations
+write.xlsx(result.list[["gene_cell_correlations"]], file = file.path(ws, "Correlations_gexp_CellProportion_in_lesions.xlsx"))
+
+
+gene_cell_correlations[["1DPI"]] %>% 
+  rownames_to_column("Gene") %>% 
+  filter(Gene %in% "Ccl3")
+
+
+temp <- gene_cell_correlations[["1DPI"]] %>% 
+  select(RCTD_Microglia) %>% 
+  filter(!is.na(RCTD_Microglia)) %>% 
+  rownames_to_column("Gene") %>% 
+  arrange(desc(RCTD_Microglia)) %>% 
+  mutate(Percentile = row_number() / n() * 100)
+
+# top positive and negative correlations
+cc_labels <- temp %>% filter(Gene %in% c("Ccl3", "Ccl4", "Ccl12"))
+top_pos <- temp %>% top_n(20, RCTD_Microglia)
+top_neg <- temp %>% top_n(-5, RCTD_Microglia)
+# top_genes <- bind_rows(top_pos, top_neg)
+
+# Create the rank plot
+temp_plot <- ggplot(temp, aes(x = Percentile, y = RCTD_Microglia)) +
+  geom_point() +
+  geom_label_repel(data = cc_labels, aes(label = Gene), 
+                   color = "black", 
+                   fill = col.list$zeng.cols["Microglia"], 
+                   box.padding = 0.3, 
+                   point.padding = 0.2, 
+                   segment.color = 'grey50',
+                   max.overlaps = Inf,
+                   min.segment.length = 0,
+                   force = 3, 
+                   direction = "both", # Move labels horizontally
+                   nudge_x = 25 , # Ensure labels start at least at x = 10
+                   segment.size = 0.2) +
+  # geom_label_repel(data = top_neg, aes(label = Gene), 
+  #                  color = "black", 
+  #                  fill = col.list$zeng.cols["Microglia"], 
+  #                  box.padding = 0.3, 
+  #                  point.padding = 0.2, 
+  #                  segment.color = 'grey50',
+  #                  max.overlaps = Inf,
+  #                  min.segment.length = 0,
+  #                  force = 1, 
+  #                  direction = "both", # Move labels horizontally
+  #                  nudge_x = -25, # Ensure labels end at most at x = 90
+  #                  segment.size = 0.2) +
+  labs(title = "Rank Plot of Correlation with RCTD_Microglia",
+       x = "Gene Percentile",
+       y = expression(rho[p])) +
+  theme_mk + 
+  remove_grid
+print(temp_plot)
+```
+
 How are the cell populations related to enriched biological processes?
 ```{r load GO results}
 result.list[["Enrichments"]] <- readRDS(file = file.path("ws", "Metascape_GO_parent_terms.Rds"))
@@ -957,7 +1051,6 @@ cside.list[["CSIDE_D7_Astrocytes_CortexvsLesion"]] <- run.CSIDE.single(
   doublet_mode = F ## doublet-mode was 'full'
   )
 ```
-
 
 ```{r C-Side for Microglia}
 Idents(spatial.seurat) <- "Condition"

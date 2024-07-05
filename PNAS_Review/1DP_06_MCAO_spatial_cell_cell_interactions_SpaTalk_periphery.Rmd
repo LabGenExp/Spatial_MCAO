@@ -167,16 +167,51 @@ save(spatalk.list, result.list, prep.list, file = file.path("data", "1DP_05_MCAO
 # The output are named as "SpaTalk_RefZeng2023_MCAO_spatial_full_xxxx.Rdata", for each section separately to make the object read and load more efficient.
 ```
 
-When finished, load periphery Spatalk objects
+When completed, load periphery Spatalk objects
 ```{r load periphery SpaTalk objects}
+ctrl_sections <- c("Ctrl", sections)
 spatalk.list <- list()
-for(section in sections){
-  load(file = file.path("data", paste0("SpaTalk_RefZeng2023_MCAO_spatial_full_", section, "_periphery.Rdata")))
-  spatalk.list[[section]] <- full_spatalk
-}
+for(section in ctrl_sections) {
+    if (section == "Ctrl") {
+      load(file = file.path("data", paste0("SpaTalk_RefZeng2023_MCAO_spatial_full_", section, ".Rdata")
+      ))
+      spatalk.list[[section]] <- full_spatalk
+      rm(full_spatalk)
+    } else {
+      load(file = file.path("data", paste0("SpaTalk_RefZeng2023_MCAO_spatial_full_", section, "_periphery.Rdata")))
+      spatalk.list[[section]] <- full_spatalk
+      rm(full_spatalk)
+    }
+  }
 
-rm(section, full_spatalk)
+rm(section, full_spatalk) 
 ```
+
+Before looking at LR pairs of glia, start by collecting interaction lists of all the celltypes in the periphery
+```{r interaction lists of LR pairs in lesino periphery}
+result.list[["Interaction_lists"]] <- ctrl_sections %>% lapply(\(x){
+  temp <- spatalk.list[[x]]@lrpair %>% 
+    mutate(Condition = rep(x, times = nrow(.)), 
+           CellPair = paste0(celltype_sender, "-", celltype_receiver), 
+           LRpair = paste0(ligand, "-", receptor)) %>% 
+    arrange(desc(lr_co_exp_num))
+  return(temp)
+})
+names(result.list[["Interaction_lists"]]) <- ctrl_sections
+
+write.xlsx(result.list[["Interaction_lists"]], file = file.path(ws, "InteractionLists_LRpairs_ctrl_and_lesion_periphery.xlsx"))
+```
+
+Explore the looks of these interactions
+```{r plot lr pair}
+SpaTalk::plot_lrpair(spatalk.list[["1DPI"]], 
+                     celltype_sender = "Neurons", 
+                     celltype_receiver = "Granulocytes", 
+                     ligand = "Bsg", 
+                     receptor = "Itgb2")
+```
+
+
 
 CCI of receiving glia
 ```{r glia receivers}
@@ -258,7 +293,7 @@ mtx <- spatial.seurat %>%
   rowwise() %>% 
   mutate(Apoe_Trem2_lr_exp = case_when(
     exp_Apoe == 0 | exp_Trem2 == 0 ~ 0, 
-    TRUE ~ mean(c(exp_Apoe, exp_Trem2))
+    TRUE ~ min(c(exp_Apoe, exp_Trem2))
   )) %>% 
   ungroup()
 
@@ -274,11 +309,11 @@ spatial.seurat@meta.data$Apoe_Trem2_lr_exp %>% summary
 
 spatial.seurat %>% SpatialPlot(
   features = "Apoe_Trem2_lr_exp", 
-  images = sections, 
+  images = c("Ctrl", sections), 
   image.alpha = 0.2, 
   stroke = 0, 
   crop = T, 
-  ncol = 3, 
+  ncol = 4, 
   pt.size.factor = 1.9, 
   combine = TRUE
   ) & 
@@ -289,20 +324,17 @@ spatial.seurat %>% SpatialPlot(
   scale_fill_gradientn(colors = col.list$gradient_grey_to_red, limits = c(0, 5.1)) & 
   scale_alpha_continuous(range = c(0.75, 1))
 ```
+
 Apoe-Trem2 is the most numerous change! How wide spread is Apoe-Trem2 signaling under control conditions? 
 ```{r apoe trem2 in control conditions}
-spatalk.list <- list()
+# spatalk.list <- list()
 load(file = file.path("data", "SpaTalk_RefZeng2023_MCAO_spatial_full_Ctrl.Rdata")) ## full_spatalk object of control cortex is added
 spatalk.list[["Ctrl"]] <- full_spatalk
 
-load(file = file.path("data", "SpaTalk_RefZeng2023_MCAO_spatial_full_7DPI.Rdata"))
-spatalk.list[["7DPI"]] <- full_spatalk
+# load(file = file.path("data", "SpaTalk_RefZeng2023_MCAO_spatial_full_7DPI.Rdata"))
+# spatalk.list[["7DPI"]] <- full_spatalk
 
-SpaTalk::plot_lrpair(spatalk.list[["Ctrl"]], 
-                     celltype_sender = "OLs", 
-                     celltype_receiver = "Microglia", 
-                     ligand = "Apoe", 
-                     receptor = "Trem2")
+
 
 
 SpaTalk::plot_lrpair(spatalk.list[["7DPI"]], 
@@ -323,7 +355,7 @@ plot <- SpaTalk::plot_lr_path(
     receptor = "Trem2", 
     size = 2, 
     color = col.list$zeng.cols
-    ) 
+    )
 
 # Extract data from the plot
 plot_data <- ggplot_build(plot)$data[[2]] %>% 
@@ -342,22 +374,34 @@ result.list[["downstream_apoe_trem2_genes"]] <- list(
 What processes are the downstream genes involved in?
 ```{r Apoe-Trem2 downstream GO}
 # exemplary downstream targets
-result.list[["Apoe_Trem2_downstream_targets"]] <- sections %>% lapply(\(x){
-  # get the LR pairs
-  plot <- SpaTalk::plot_lr_path(
-    object = spatalk.list[[x]],
-    celltype_sender = "OLs", 
-    celltype_receiver = "Microglia", 
-    ligand = "Apoe", 
-    receptor = "Trem2"
-    )
-  
-  # extract the downstream targets
-  downstream_targets <- plot[["plot_env"]][["plot_node_new"]][["gene"]] %>% unique
-  return(downstream_targets)
-}) %>% 
-  unlist %>% 
-  unique %>% 
+result.list[["Apoe_Trem2_downstream_targets"]] <-
+  sections %>% lapply(\(x) {
+    # screen for celltype senders
+    celltype_sender <-
+      c("OLs",
+        "Astrocytes",
+        "Neurons",
+        "OPCs",
+        "PeripheralMyeloidCells")
+    celltype_list <- list()
+    
+    for (i in celltype_sender) {
+      # get the LR pairs
+      plot <- SpaTalk::plot_lr_path(
+        object = spatalk.list[[x]],
+        celltype_sender = i,
+        celltype_receiver = "Microglia",
+        ligand = "Apoe",
+        receptor = "Trem2"
+      )
+      # extract the downstream targets
+      celltype_list[[i]] <-
+        plot[["plot_env"]][["plot_node_new"]][["gene"]] %>% unique
+    }
+    return(celltype_list)
+  }) %>%
+  unlist(recursive = TRUE, use.names = FALSE) %>%
+  unique %>%
   sort
 
 # enrichment for processes of downstream targets
@@ -371,17 +415,18 @@ universe <- sections %>% lapply(\(x){
   unlist %>% 
   unique
 
-result.list[["GO_apoe_trem_downstream_targets"]] <- clusterProfiler::enrichGO(
-  gene = result.list[["Apoe_Trem2_downstream_targets"]], 
-  OrgDb = org.Mm.eg.db, 
-  universe = universe,
-  ont = "ALL", 
-  keyType = "SYMBOL", 
-  pvalueCutoff = 0.01, 
-  pAdjustMethod = "fdr", 
-  minGSSize = 10, 
-  pool = TRUE
-  ) %>% 
+result.list[["GO_apoe_trem_downstream_targets"]] <-
+  clusterProfiler::enrichGO(
+    gene = result.list[["Apoe_Trem2_downstream_targets"]],
+    OrgDb = org.Mm.eg.db,
+    universe = universe,
+    ont = "ALL",
+    keyType = "SYMBOL",
+    pvalueCutoff = 0.01,
+    pAdjustMethod = "fdr",
+    minGSSize = 10,
+    pool = TRUE
+  ) %>%
   simplify()
 
 
@@ -392,12 +437,12 @@ downstream_go <- result.list[["GO_apoe_trem_downstream_targets"]]@result %>%
 go_processes <- c(
     "proteasome complex", 
     "neuron apoptotic process", 
-    "positive regulation of ERK1 and ERK2 cascade", 
-    "gliogenesis", 
-    "glucose metabolic process", 
-    "chemotaxis", 
+    "ERK1 and ERK2 cascade", 
     "positive regulation of cytokine production", 
-    "tissue remodeling"
+    "chemotaxis", 
+    "gliogenesis", 
+    "tissue remodeling",
+    "glucose metabolic process"
   )
 
 # select top processes and turn it into a named list
@@ -423,7 +468,7 @@ result.list[["GO_apoe_trem_downstream_df"]] <- downstream_go %>%
   dplyr::filter(Description %in% go_processes) %>% 
   dplyr::mutate(Description = Description %>% 
                   stringr::str_to_sentence() %>% 
-                  stringr::str_replace_all(pattern = "erk", replacement = "ERK"),
+                  stringr::str_replace_all(pattern = "erk|Erk", replacement = "ERK"),
                 Pvalue = -log10(p.adjust)) %>%
   dplyr::arrange(Pvalue) %>% 
   dplyr::mutate(Description = factor(Description, levels = Description))
@@ -452,12 +497,12 @@ heatmap_data <- spatial.seurat@meta.data %>%
   summarise(
     `Proteasome Complex` = mean(`GO_Proteasome complex1`), 
     `Neuron Apoptotic Process` = mean(`GO_Neuron apoptotic process2`), 
-    `ERK1 and ERK2 cascade` = mean(`GO_Positive regulation of erk1 and erk2 cascade3`), 
-    Gliogenesis = mean(GO_Gliogenesis4), 
-    `Glucose Metabolic Process` = mean(`GO_Glucose metabolic process5`),
-    Chemotaxis = mean(GO_Chemotaxis6), 
-    `Cytokine Production` = mean(`GO_Positive regulation of cytokine production7`), 
-    `Tissue Remodeling` = mean(`GO_Tissue remodeling8`),
+    `ERK1 and ERK2 cascade` = mean(`GO_Erk1 and erk2 cascade3`), 
+    `Cytokine Production` = mean(`GO_Positive regulation of cytokine production4`), 
+    Chemotaxis = mean(GO_Chemotaxis5), 
+    Gliogenesis = mean(GO_Gliogenesis6), 
+    `Tissue Remodeling` = mean(`GO_Tissue remodeling7`),
+    `Glucose Metabolic Process` = mean(`GO_Glucose metabolic process8`),
     Neurons = mean(RCTD_Neurons), 
     Astrocytes = mean(RCTD_Astrocytes), 
     Microglia = mean(RCTD_Microglia), 

@@ -1,0 +1,2807 @@
+---
+title: "MCAO_scsn"
+author: "Daniel Zucha"
+date: "2023-06-07"
+output: html_document
+---
+
+A markdown for the analysis of the processed single-nucleus and single-cell datasets. All .Rds can be downloaded from the Mendeley data repository.
+
+Input files:
+  - Spatial dataset (Mendeley data repo): "data/seurat_spatial_integrated_ready.Rds"
+  - single-cell/nucleus datasets (found on the Mendeley data repo): "data/seurat_all_UMAP_soupX.rds" (all populations, sn), "data/seurat_ASTRO_names_soupX.rds" (astroependymal, sn), "data/seurat_MG_names_soupX.rds" (microglia, sn), "data/seurat_OLIGO_names_soupX.rds" (oligodendrocyte-lineage cells, sn), "data/seurat_OLIGO_integrated_UMAP_named.rds" (oligodendricytes, sc+sn integrated)
+  - published marker sets (Supp. materials): "data/SupplementaryTable4_Metanalysis_GlialReactivityMarkers.xlsx"
+  
+  
+=== Essential chunks. Always load. === 
+
+```{r libraries}
+library(Seurat); library(SeuratWrappers); library(dplyr); library(ggplot2); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr); library(gridExtra); library(patchwork); library(plotly); library(dittoSeq); library(pheatmap)
+
+options(Seurat.object.assay.version = "v3")
+
+## sourcing helper functions
+source("code/supporting_functions_MCAO.R")
+```
+
+```{r working space and lists}
+if(!dir.exists("results/PNAS/Fig04")){dir.create("results/PNAS/Fig04")
+  ws <- "results/PNAS/Fig04"}else{ws <- "results/PNAS/Fig04"}
+
+# lists
+seurat.plots <- list()
+seurat.results <- list()
+```
+
+load datasets
+```{r load seurats}
+# spatial data
+spatial.seurat <- readRDS(file.path("data", "seurat_spatial_1DP_06.Rds"))
+
+# single-nucleus data
+sn.seurat <- readRDS(file = "data/Seurat_sn_MCAO_Zucha2023_QCFiltered.Rds")
+```
+
+== Main Figure ==
+
+## Astroependymal populations
+
+Loading the astro dataset
+```{r astro seurat data}
+# seurat
+astro.seurat <- readRDS("data/seurat_ASTRO_1DP_11.rds")
+
+# markers and GO
+
+```
+
+UMAPs
+```{r UMAP}
+seurat.plots[["UMAP_ASTRO"]] <- astro.seurat %>%
+  UMAPPlot(
+    group.by = "cell_type_2",
+    pt.size = 0.25,
+    label = F,
+    label.box = T, 
+    repel = T,
+    cols = col.list[["astro_cols"]]
+  ) +
+  NoLegend() +
+  theme_mk +
+  remove_grid +
+  NoAxes() +
+  theme(panel.border = element_blank(), 
+        legend.position = "none") + 
+  labs(title = NULL)
+
+print(seurat.plots[["UMAP_ASTRO"]])
+
+# save 
+  ggsave(filename = file.path(ws, "/UMAP_sn_Astroepe.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 10)
+```
+
+Population proportions clusters - condition
+```{r Proportions}
+## proportions
+library(dittoSeq)
+astro.seurat$Condition %>% table
+astro.seurat$cell_type_2 %>% table
+
+astro.seurat %>% dittoBarPlot(var = "Condition", group.by = "cell_type_2", scale = "count")
+astro.seurat %>% dittoBarPlot(var = "Condition", group.by = "cell_type_2", scale = "percent")
+
+## data frames
+astro.seurat$Condition %<>% factor(levels = c("sham", "D1", "D3", "D7"))
+
+calculate_proportions <- \(seurat, group.by, celltype_annotation) {
+  # initialize the proportion matrix
+  ids <- seurat@meta.data[[group.by]] %>% levels
+  categories <- seurat@meta.data[[celltype_annotation]] %>% levels
+  counts <- matrix(nrow = length(ids), ncol = length(categories))
+  rownames(counts) <- ids
+  colnames(counts) <- categories
+  
+  # count the occurences
+  for (i in seq_along(ids)) {
+    for (j in seq_along(categories)) {
+      count <- seurat@meta.data %>%
+        filter(.data[[group.by]] == ids[i], .data[[celltype_annotation]] == categories[j]) %>%
+        nrow()
+      
+      counts[i, j] <- count
+    }
+  }
+  
+  
+  # get the percent count proportions
+  require(tidyr)
+  counts <- counts/rowSums(counts)
+  counts_mm_1 <- counts %>% 
+    as.data.frame %>% 
+    rownames_to_column(group.by) %>% 
+    tidyr::pivot_longer(
+      cols = -all_of(group.by),
+      names_to = celltype_annotation, 
+      values_to = "value")
+    
+  return(counts_mm_1)
+}
+
+seurat.results[["sn_astro_proportions"]] <- 
+  calculate_proportions(
+    seurat = astro.seurat, 
+    group.by = "Condition", 
+    celltype_annotation = "cell_type_2")
+
+ggplot(data = seurat.results[["sn_astro_proportions"]], aes(x = cell_type_2, y = value, fill = Condition)) + ## percent count proportions
+  geom_col(position = "dodge") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(
+      angle = 105,
+      hjust = 1,
+      vjust = 0,
+      size = 35,
+      color = "black"
+    ),
+    axis.text.y = element_text(
+      angle = 90,
+      hjust = 0.5,
+      vjust = 0.5,
+      size = 18,
+      color = "black"
+    ),
+    axis.title = element_text(family = "OpenSans", size = 25),
+    plot.background = element_blank(),
+    panel.background = element_blank()
+  ) +
+  ylab('Proportion of nuclei') +
+  xlab("") + ggtitle("") + NoLegend() + ylim(0, (max(seurat.results[["sn_astro_proportions"]]$value) + 0.1)) +
+  scale_fill_manual(values = col.list$Condition)
+
+
+p %>% ggsave(filename = paste0(ws, "/BarPlot_PercentProportions_sn_astro_bySample.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 10, height = 8, bg = 'transparent')
+```
+
+Markers and dotplot
+```{r Markers}
+all.markers <- FindAllMarkers(astro.seurat, logfc.threshold = 0.58, assay = 'SCT', verbose = T, only.pos = T) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  split(f = .[["cluster"]]); names(all.markers) <- paste0("SN_Ast_", names(all.markers))
+write.xlsx(all.markers, file = file.path(ws, "Markers_sn_AstroEpe.xlsx"), overwrite = T)
+
+astro.seurat %>% FeaturePlot(features = c("Dcx", "Foxj1", "Tmem72"), label = T)
+
+## dotplot
+astro.seurat$cell_type_2 %>% levels
+
+{
+  features_test <- c('Dcx', 'Nrxn3', "Adarb2",   # Neuroblasts
+                   'Foxj1', 'Adamts20', 'Tmem212', # Ependymal
+                   'Tmem72', 'Htr2c', "Otx2os1",  # Choroid Plexus cells
+                   'Grm3', 'Rgs7', 'Htra1',  # TE Astro
+                   'Slc1a3',  # astro general
+                   "Gria1", "Fry", "Slc6a11", "Mgat4c",  # DE Astro
+                   'Ogt', 'Fam107a', 'Cox8a', 'Aldoc', "Shank1", "Nrgn", # Activated Astro
+                   "Ctsd", 'Gfap', "Clu", 'Apoe', "Ptn", "Gpm6b", "Cd9", "Vim", "Thbs4"    # Reactive astro
+                   )
+
+p <- DotPlot(astro.seurat, assay = "SCT", features = features_test, group.by = "cell_type_2", cols = c("#FFF7FB", "#014636")) + 
+  theme(text = element_text(family = "OpenSans", size = 20), 
+        axis.text.y = element_text(size = 30, hjust = 1), 
+        axis.text.x = element_text(angle = 55, vjust = 1, hjust = 1, size = 25), 
+        axis.ticks = element_blank(), legend.position = "right") + ylab("") + xlab("");p
+p %>% ggsave(filename = paste0(ws, "/DotPlot_sn_Astroepe.tiff"), device = 'tiff', dpi = 300, width = 7.5, height = 3)  
+}
+```
+
+Mitochondrial and ribosomal content
+```{r mito and ribo}
+astro.seurat[["percent_mt"]] <- PercentageFeatureSet(astro.seurat, pattern = "mt-")
+astro.seurat %>% FeaturePlot(features = "percent_mt", pt.size = 0.25, max.cutoff = 'q99', cols = brewer.pal(n = 9, name = "Blues")[3:9]) %>% 
+  ggsave(filename = file.path(ws, "FeaturePlot_sn_astro_percentMT.tiff"), device = 'tiff', dpi = 300, width = 10, height = 10, units = 'cm')
+
+astro.seurat[["percent_rib"]] <- PercentageFeatureSet(astro.seurat, pattern = "Rpl|Rps")
+astro.seurat %>% FeaturePlot(features = "percent_rib", pt.size = 0.25, max.cutoff = 'q99', cols = brewer.pal(n = 9, name = "Blues")[3:9]) %>% 
+  ggsave(filename = file.path(ws, "FeaturePlot_sn_astro_percentRIB.tiff"), device = 'tiff', dpi = 300, width = 10, height = 10, units = 'cm')
+```
+
+Gene ontology analysis
+```{r GO analysis}
+astro.seurat$cell_type_2 %>% levels
+
+## GO analysis - Reac Astro vs DE Astro ####
+diff.reac.markers <- astro.seurat %>% FindMarkers(ident.1 = "Reactive Astrocytes", ident.2 = c("DE Astrocytes"), logfc.threshold = 0.58, only.pos = T, assay = 'SCT', verbose = T) %>%
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01)
+
+reac.markers <- list(
+  "Reactive Astrocytes" = diff.reac.markers %>% filter(avg_log2FC > 0.58) %>% rownames() %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)]
+)
+
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE)
+organism <- org.Mm.eg.db; background <- rownames(astro.seurat[["SCT"]])
+ORA.list <- lapply(reac.markers, function(x) enrichGO(gene          = x, # list of genes 
+                                                      universe      = background, # 'potential DEGs'
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = organism,
+                                                      ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01, #
+                                                      qvalueCutoff  = 0.2,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% clusterProfiler::simplify()
+                   )
+ORA.list %>% write.xlsx(file = file.path(ws, "ORAlist_sn_ReacAstro_vs_DEastro.xlsx"), overwrite = T)
+
+## selecting terms for the barplot
+ORA.list <- read_all_sheets(file = file.path(ws, "ORAlist_sn_ReacAstro_vs_DEastro.xlsx"))
+terms <- c(
+           ## BP
+           "GO:0007263", # NO mediated signal transduction
+           "GO:0014009", # glial cell proliferation
+           "GO:0050767", # regulation of neurogenesis
+           "GO:0040013", # negative regulation of locomotion
+           "GO:0061687", # detoxification of inorganic compound
+           
+           ## CC
+           "GO:0005764", # lysosome
+           "GO:0045121", # membrane raft
+           "GO:1990777", # lipoprotein particle
+           "GO:0030312", # external encapsulating structure
+           
+           ## MF
+           "GO:0050839" # cell adhesion molecule binding
+           )
+
+{
+  population <- "Reactive Astrocytes"
+  subset.ORA <- ORA.list[[population]] %>% filter(ID %in% terms)
+  ORA.data <- data.frame(
+    'Description' = subset.ORA[["Description"]] %>% stringr::str_to_title(),
+    'Pval' = subset.ORA[["p.adjust"]] %>% log10 %>% '*'(-1))
+  ORA.data$Description %<>% factor(levels = rev(unique(.)))
+  rm(subset.ORA)
+  
+  (ggplot(data = ORA.data, aes(x = Description, y = Pval)) + 
+    geom_bar(stat = "identity", width = 0.6, size = 0.2, colour = "black", alpha = 0.75, fill = col.list[["astro_cols"]][[population]]) +
+    ylim(0, max(ORA.data$Pval) + 1) + 
+    geom_hline(yintercept = 1.3, size = 0.2) +
+    coord_flip() +
+    theme(text = element_text(family = "OpenSans", size = 40), 
+          axis.text.x = element_text(vjust = 1, size = 40),
+          axis.text.y = element_text(vjust = 0.5, size = 40, color = 'black'),
+          axis.ticks = element_blank(),
+          panel.background = element_blank(), #transparent panel bg
+          plot.background = element_blank(), #transparent plot bg 
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2)
+          ) +  
+          xlab("") + ylab(expression(paste("-log(Padj)")))) %>% ggsave(filename = paste0(ws, "/Barplot_sn_ReacAstro_GO_", population, ".tiff"), device = "tiff", dpi = 300, width = 7, height = 5)
+}
+
+## GO analysis - Activated vs DE Astro ####
+diff.reac.markers <- astro.seurat %>% FindMarkers(ident.1 = "Activated Astrocytes", ident.2 = c("DE Astrocytes"), logfc.threshold = 0.58, only.pos = T, assay = 'SCT', verbose = T) %>%
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01)
+
+reac.markers <- list(
+  "Activated Astrocytes" = diff.reac.markers %>% filter(avg_log2FC > 0.58) %>% rownames() %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)]
+)
+
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE)
+organism <- org.Mm.eg.db; background <- rownames(astro.seurat[["SCT"]])
+ORA.list <- lapply(reac.markers, function(x) enrichGO(gene          = x, # list of genes 
+                                                      universe      = background, # 'potential DEGs'
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = organism,
+                                                      ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01, #
+                                                      qvalueCutoff  = 0.2,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% clusterProfiler::simplify()
+                   )
+ORA.list %>% write.xlsx(file = file.path(ws, "ORAlist_sn_ActivatedAstro_vs_DEastro.xlsx"), overwrite = T)
+```
+
+Projections on how the origin of the astro populations, based on the Zeisel et al annotation. Calculation of the projections is in a separate markdown.
+```{r Brain region projections}
+## plot
+astro.seurat@assays %>% names
+DefaultAssay(astro.seurat) <- "prediction_ASTRO_region" ## azimuth projection based on Zeisel et al
+astro.seurat@assays$prediction_ASTRO_region %>% dimnames %>% .[1] ## brain region names
+
+
+## where are the reactive astro populations from?
+astro.seurat %>% VlnPlot(features = "Telencephalon", group.by = "cell_type_2") ## telencephalon
+astro.seurat %>% VlnPlot(features = "Hypothalamus,Thalamus,Midbrain dorsal,Midbrain ventral,Pons,Medulla,Spinal cord", group.by = "cell_type_2") ##diencephalon
+
+(FeaturePlot(astro.seurat, features = c("Telencephalon"), pt.size = 0.25, cols = brewer.pal(n = 9, name = "BuGn")[3:9]) + ## telencephalon projection
+  theme(plot.background = element_blank(), panel.background = element_blank())) %>% 
+  ggsave(filename = file.path(ws, "FeaturePlot_sn_Astroepe_Telencephalon_projection.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 10, height = 10)
+
+(FeaturePlot(astro.seurat, features = c("Hypothalamus,Thalamus,Midbrain dorsal,Midbrain ventral,Pons,Medulla,Spinal cord"), pt.size = 0.25, cols = brewer.pal(n = 9, name = "BuGn")[3:9]) + ## diencephalon projection
+  theme(plot.background = element_blank(), panel.background = element_blank())) %>% 
+  ggsave(filename = file.path(ws, "FeaturePlot_sn_Astroepe_Diencephalon_projection.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 10, height = 10)
+
+```
+
+Visualising the astroependymal populations in the spatial data.
+```{r Astro in Spatial}
+astro.markers <- read_all_sheets(file.path(ws, "Markers_sn_AstroEpe.xlsx"))
+
+## add to spatial data
+top.astro.markers <- lapply(names(astro.markers), function(astro){glist <- astro.markers[[astro]][["gene"]] %>% head(15); return(glist)}); names(top.astro.markers) <- names(astro.markers)
+spatial.seurat %<>% AddModuleScore(features = top.astro.markers, name = names(top.astro.markers))
+spatial.seurat[[]] %>% names %>% tail(10) ## module scores were added
+
+top.astro.markers %>% names %>% length() ## 7 astroepe populations 
+features <- spatial.seurat[[]] %>% names %>% tail(7)
+
+## plot the spatial plot
+lapply(features, function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2)
+  print(feature.name)
+  minmax <- c(min(spatial.seurat[[feature]]), max(spatial.seurat[[feature]]))
+  (spatial.seurat %>% 
+      SpatialPlot(features = feature, crop = F, pt.size = 1.35, alpha = c(0.8, 1), images = c('sham', 'D1', 'D3', 'D7'), image.alpha = 0, stroke = 0.01) & 
+      theme(text = element_text(family = plot.font, size = 9), legend.key.size = unit(0.2, 'cm')) #& NoLegend() 
+    & ggplot2::scale_fill_gradientn(colours = c("#4D4D4D", "#FFFFFF", "#016C59"), limits = minmax)
+    ) %>% 
+  ggsave(filename = paste0(ws, "/SpatialPlot_snAstro_", feature.name, ".tiff"), device = 'tiff', dpi = 300, width = 18, height = 6, units = 'cm')
+})
+```
+
+Looking at the published datasets and overlaps with our reactive population.
+```{r metanalysis}
+DefaultAssay(astro.seurat) <- "SCT"
+astro.markers <- read_all_sheets(file.path(ws, "Markers_sn_AstroEpe.xlsx"))
+metadata.list <- read_all_sheets(file = "data/SupplementaryTable4_Metanalysis_GlialReactivityMarkers.xlsx") %>% 
+  .[names(.) %>% grep(pattern = "astro|DAA", ignore.case = T)] ## keep the astro-related populations
+
+## combined UMAP and VlnPlot
+lapply(features, function(features){
+    minmax <-  c(astro.seurat[[features]] %>% min, astro.seurat[[features]] %>% max)
+    p1 <- astro.seurat %>% FeaturePlot(features = features, max.cutoff = 'q99', pt.size = 1, cols = brewer.pal(n = 9, name = "BuGn")[3:9]) + NoLegend() +
+      theme(text = element_blank(), 
+            plot.margin = unit(c(0,0,0,0), "cm"), 
+            plot.background = element_blank(), 
+            panel.background = element_blank())
+    
+    p2 <- VlnPlot(astro.seurat, features = features, pt.size = 0, group.by = "cell_type_2", cols = col.list[["astro_cols"]]) + coord_flip() & scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) & xlab("") & labs(title = "") & ylim(minmax) &
+    theme(axis.text.x = element_text(family = 'OpenSans', angle = 30, size = 10, hjust = 0.7, vjust = 0.8), 
+          axis.text.y = element_text(family = 'OpenSans', size = 10),
+          text = element_text(family = "OpenSans", size = 25), 
+          legend.position = "none", 
+          plot.margin = unit(c(0, 0.3, 0.3, 0), "cm"),
+          plot.background = element_blank(), 
+          panel.background = element_blank())
+    feature.name <- features %>% stringr::str_sub(end = -2)
+    p <- gridExtra::grid.arrange(p1, p2, ncol = 2, widths = c(1,0.5)) %>% ggsave(filename = paste0(ws, "/FeaturePlot_VlnPlot_Metanalysis_sn_Astroepe_", feature.name, ".tiff"), device = 'tiff', dpi = 300, bg = NULL, width = 9, height = 6)
+})
+
+## overlap testing
+astro.markers %>% names
+
+## only positive markers loaded?
+(astro.markers[["SN_Ast_Reactive Astrocytes"]][["avg_log2FC"]] %>% min) > 0.58
+rastro.markers <- astro.markers[["SN_Ast_Reactive Astrocytes"]][["gene"]]
+
+meta.intersects <- lapply(names(metadata.list), function(meta){
+  paste0("Length of metadataset ", meta, " is ",  metadata.list[[meta]][[1]] %>% length, " genes.") %>% print
+  int <- intersect(rastro.markers, metadata.list[[meta]][[1]]) %>% length
+  paste0("Intersection is ", int) %>% print
+  return(int)
+  }); names(meta.intersects) <- names(metadata.list)
+
+## signif testing gene overlaps
+### DAA and our reac ####
+  
+meta.signif <- lapply(names(meta.intersects), function(meta){
+  subset.reac.astro <- astro.seurat %>% subset(subset = cell_type_2 == "Reactive Astrocytes")
+  background.size <- ((subset.reac.astro@assays$RNA %>% rowSums()) > 10) %>% sum ##background gene set size with UMI counts > 10
+  intersection <- meta.intersects[[meta]]
+  meta.set.size <- metadata.list[[meta]] %>% length
+  phyper(
+  q = intersection - 1,  ## number of red marbles in the draw -1 (see below)
+  m = meta.set.size, ## number of red marbles in urn
+  n = background.size - meta.set.size, ## number of green marbles in urn
+  k = rastro.markers %>% length, ## number of drawn marbles
+  lower.tail = FALSE ## compute P(X > overlap), hence the '-1' in the q argument
+) -> test
+  return(test)
+}); names(meta.signif) <- names(meta.intersects); meta.signif %<>% p.adjust(method = "fdr")
+meta.signif; meta.signif < 0.01  ## see results; all below
+
+## Intersecting genes
+int.genes <- intersect(rastro.markers, metadata.list[["Habib2020_DAA_5XFAD"]][[1]])
+
+## Non-intersecting genes
+subset.reac.astro <- astro.seurat %>% subset(subset = cell_type_2 == "Reactive Astrocytes")
+background <- rownames(subset.reac.astro@assays$RNA)[((subset.reac.astro@assays$RNA %>% rowSums()) > 10)] ## background gene set of our reactive astrocytes.
+
+## Our reactive markers not found in DAA
+rastro.markers.unique <- rastro.markers[!(rastro.markers %in% int.genes)] 
+
+## DAA markers not found in our reactive astros
+DAA.markers.unique <- metadata.list[["Habib2020_DAA_5XFAD"]][[1]][!(metadata.list[["Habib2020_DAA_5XFAD"]][[1]] %in% int.genes)]
+
+## Gene Ontology of the non-overlapping DAA markers. = What processes are missing in our reactive astrocytes?
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE); organism <- org.Mm.eg.db
+GO.DAA.markers.unique <- enrichGO(gene          = DAA.markers.unique, # list of genes 
+                                  universe      = background, # 'potential DEGs'
+                                  keyType       = "SYMBOL", # or ENSEMBL
+                                  OrgDb         = organism,
+                                  ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                  pAdjustMethod = "fdr",
+                                  pvalueCutoff  = 0.01, 
+                                  qvalueCutoff  = 0.2,
+                                  readable      = F,
+                                  minGSSize     = 5) #%>% clusterProfiler::simplify()
+
+
+
+
+## Published datasets in spatial
+## add metadata
+spatial.seurat %<>% AddModuleScore(features = metadata.list, name = metadata.list %>% names)
+features <- names(metadata.list) %>% paste0(., seq(1:length(.))) ## feature names as they are added
+identical(features, spatial.seurat[[]] %>% names %>% tail(length(features))) ## TRUE = vector names are identical
+
+## correlation our Reactive and DAA Habib
+spatial.seurat %<>% AddModuleScore(features = list(rastro.markers %>% head(15)), name = "snAst_Reac")
+
+spatial.seurat[[]] %>% names
+df <- data.frame(
+  "snAst_Reac" = spatial.seurat$snAst_Reac1,
+  "Habib_DAA" = spatial.seurat$Habib2020_DAA_vs_homeo2
+)
+
+cor.test(x = df$snAst_Reac, y = df$Habib_DAA, method = "spearman")
+plot(x = df$snAst_Reac, y = df$Habib_DAA)
+
+(ggplot(data = df, aes(x = snAst_Reac, y = Habib_DAA)) + 
+  geom_point(aes(color = snAst_Reac), size = 0.5) + 
+    scale_color_gradientn(colors = c("#3690C0", "#014636")) +
+  geom_smooth(method = 'lm', se = F, color = "black") + xlab("Reactive Astrocyte signature") + ylab("DAA signature") + theme_light() +
+    theme(axis.title = element_text(size = 20, family = "OpenSans"))) %>% ggsave(filename = file.path(ws, "ScatterPlot_snAstroReac_HabibDAA.tiff"), device = 'tiff', dpi = 300, height = 5, width = 7, units = "cm")
+
+## signif testing on module scores
+features
+Astrosplitlist <- astro.seurat@meta.data %>% group_split(cell_type_2); names(Astrosplitlist) <- astro.seurat$cell_type_2 %>% levels
+wilcox.meta <- lapply(features, function(feature){
+  temp <- lapply(c('Reactive_Astro1', 'Reactive_Astro2'), function(AS){
+    test.res <- wilcox.test(x = Astrosplitlist[[AS]][[feature]],
+                            y = c(Astrosplitlist[['ASTRO_DE']][[feature]], Astrosplitlist[['ASTRO_TE']][[feature]]), conf.int = T)
+    test.pval <- test.res[["p.value"]]
+  }); names(temp) <- c('Reactive_Astro1', 'Reactive_Astro2')
+  return(temp)
+}); names(wilcox.meta) <- features; wilcox.meta %<>% unlist %>% p.adjust(method = 'fdr'); wilcox.meta %>% .[. < 0.01] ## adjusting p values for multiple hypothesis testing and selecting only those with pval< 0.01
+
+wilcox.meta[wilcox.meta < 0.0001] %>% names
+
+```
+
+=== Microglial populations. ===
+
+Loading the seurat and making a separate folder for microglia results.
+```{r seurat load}
+mg.seurat <- readRDS("data/seurat_MG_names_soupX.rds"); DefaultAssay(mg.seurat) <- "SCT"
+
+mg.seurat$cell_type_2 %>% levels
+mg.seurat %<>% subset(idents = "debris", invert = T)  ## remove dead cells
+mg.seurat$cell_type_2 <- case_when(
+  mg.seurat$cell_type_2 == "homeostatic" ~ "Homeostatic",
+  mg.seurat$cell_type_2 == "TAM" ~ "Reactive"
+); mg.seurat$cell_type_2 %<>% factor(levels = c("Homeostatic", "Reactive")); mg.seurat %<>% SetIdent(value = "cell_type_2")
+mg.seurat[[]] %>% names() ## metadata overview
+
+col.list[["mg_cols"]] <- c(
+  "Homeostatic" = "#FC9272",
+  "Reactive" = "#A50F15"
+)
+```
+
+UMAP
+```{r Figure sn UMAP}
+(mg.seurat %>% 
+  UMAPPlot(group.by = "cell_type_2", pt.size = 1, label = F, label.box = T, cols = col.list[["mg_cols"]]) + 
+  NoLegend() + 
+  theme(plot.background = element_blank(), panel.background = element_blank())) %>% ggsave(filename = file.path(ws, "UMAPPlot_sn_mg.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 10)
+```
+
+Proportions per conditions.
+```{r Figure sn Proportions}
+## proportions
+library(dittoSeq)
+mg.seurat$Condition %>% table
+mg.seurat$cell_type_2 %>% table
+
+mg.seurat %>% dittoBarPlot(var = "Condition", group.by = "cell_type_2", scale = "count")
+mg.seurat %>% dittoBarPlot(var = "Condition", group.by = "cell_type_2", scale = "percent")
+
+## data frames
+ids <- mg.seurat@meta.data$Condition %>% levels; categories <- unique(mg.seurat@meta.data$cell_type_2); counts <- matrix(nrow=length(ids), ncol=length(categories)); rownames(counts) <- ids; colnames(counts) <- categories
+for (i in seq_along(ids)) {
+  for (j in seq_along(categories)) {
+    count <- mg.seurat@meta.data %>%
+      filter(Condition == ids[i], cell_type_2 == categories[j]) %>%
+      nrow()
+
+    counts[i, j] <- count
+  }
+}; rm(i,j)
+
+counts_mm_0 <- reshape2::melt(counts, id = "rownames") ## total count proportions
+
+ggplot(data = counts_mm_0, aes(x = Var2, y = value, fill = Var1)) + 
+  geom_col(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylab('Proportion of cells')
+counts <- counts/rowSums(counts)
+counts_mm_1 <- reshape2::melt(counts, id = "rownames") ## percent count proportions
+
+
+p <-  ggplot(data = counts_mm_1, aes(x = Var2, y = value, fill = Var1)) + ## percent count proportions
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 105, hjust = 1, vjust = 0, family = "OpenSans", size = 35, color = "black"), 
+          axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5, family = "OpenSans", size = 18, color = "black"),
+          axis.title = element_text(family = "OpenSans", size = 25),
+          plot.background = element_blank(),
+          panel.background = element_blank()) +
+    ylab('Proportion of nuclei') +
+    xlab("") + ggtitle("") + NoLegend() + ylim(0,1) +
+    scale_fill_manual(values = c("#525475", "#F1D7AB", "#E6B188", "#D18080")); p
+p %>% ggsave(filename = file.path(ws, "BarPlot_PercentProportions_sn_MG_bySample.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 6, height = 8, bg = 'transparent')
+```
+
+Marker genes, dotplot, volcano plot.
+```{r Markers and Volcano}
+## Markers
+mg.seurat.markers.TAM <- FindMarkers(mg.seurat, ident.1 = "Reactive", ident.2 = "Homeostatic", assay = "SCT", logfc.threshold = 0.58, only.pos = F, verbose = T) %>% arrange(desc(avg_log2FC)) %>% filter(p_val_adj < 0.01)
+
+mg.seurat.markers <- FindAllMarkers(object = mg.seurat, assay = "SCT", logfc.threshold = 0.58, verbose = T, only.pos = T) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  split(f = .[["cluster"]]); names(mg.seurat.markers) <- paste0("SN_MG_", names(mg.seurat.markers))
+
+mg.seurat.markers %>% write.xlsx(file = file.path(ws, "Markers_sn_MG.xlsx"), overwrite = T)
+mg.seurat.markers <- read_all_sheets(file = file.path(ws, "Markers_sn_MG.xlsx"))
+
+## Dotplot ####
+{
+  features_test <- c('Hexb', 'Cx3cr1', 'P2ry12', 'Tmem119',  # homeo MG
+                     'Apoe', 'Ctsb', 'Abca1',  'Hif1a', 'Spp1', 'Sash1',  'H2-D1', 'Lyz2', 'Trem2', 'Igf1', "Lgals3",  'Gpnmb'  ## reactive mg
+                     )
+
+  p <- DotPlot(mg.seurat, assay = "SCT", features = features_test, group.by = "cell_type_2", cols = c("#FFF7FB", "#A50F15")) + 
+    theme(text = element_text(family = "OpenSans", size = 35),
+        axis.text.y = element_text(size = 50, hjust = 1), 
+        axis.text.x = element_text(angle = 55, vjust = 1, hjust = 1, size = 35), 
+        axis.ticks = element_blank(), legend.position = "right") + ylab("") + xlab("");p
+  p %>% ggsave(filename = paste0(ws, "/DotPlot_sn_MG.tiff"), device = 'tiff', dpi = 300, width = 6.5, height = 3)
+}
+
+  
+## Volcano plot ####
+library(EnhancedVolcano)
+marker.df <- mg.seurat.markers.TAM
+keyvals.colour <- ifelse(
+  marker.df$avg_log2FC < -0.58 & marker.df$p_val_adj < 0.01, '#3288BD',
+  ifelse(marker.df$avg_log2FC > 0.58 & marker.df$p_val_adj < 0.01, '#D53E4F',
+         '#E7E7E7')) 
+names(keyvals.colour)[keyvals.colour == '#3288BD'] <- 'downregulated'; names(keyvals.colour)[keyvals.colour == '#D53E4F'] <- 'upregulated'; names(keyvals.colour)[keyvals.colour == '#E7E7E7'] <- 'insignificant'
+
+p <- EnhancedVolcano(toptable = marker.df,
+                     lab = rownames(marker.df),
+                     x = 'avg_log2FC',
+                     y = 'p_val_adj',
+                     axisLabSize = 20,
+                     titleLabSize = 14,
+                     title = "",
+                     pCutoff = 0.05,
+                     colAlpha = 0.7,
+                     colCustom = keyvals.colour,
+                     subtitleLabSize = 9,
+                     FCcutoff = 0.4,
+                     labSize = 10,
+                     pointSize = 3.0,
+                     drawConnectors = T,
+                     max.overlaps = 10,
+                     maxoverlapsConnectors = NULL,
+                     arrowheads = F,
+                     boxedLabels = T,
+                     selectLab = c('P2ry12', 'Cx3cr1', 'Lyz2', 'Gpnmb', 'Apoe', 'Trem2', 'Spp1', 'Igf1', 'Ctsb', 'Lpl', 'Sash1', 'H2-D1'), ## select genes to highlight
+                     labFace = "bold",
+                     cutoffLineType = "blank") + 
+  theme_light() + theme(axis.text = element_text(size = 30), axis.title = element_text(size = 30)) +
+  NoLegend(); p
+p %>% ggsave(filename = file.path(ws, "VolcanoPlot_sn_MG_ReactiveVsOthers.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 12, height = 12)
+```
+
+Gene ontology analysis
+```{r GO analysis}
+mg.seurat$cell_type_2 %>% levels
+mg.seurat.markers <- read_all_sheets(file.path(ws, "Markers_sn_MG.xlsx"))
+mg.seurat.markers[["Reactive"]]$avg_log2FC %>% min ## min value, need to filter?
+mg.seurat.markers[["Reactive"]]$p_val_adj %>% max ## max value, need to filter?
+
+diff.reac.list <- list(
+  "Reactive" = mg.seurat.markers[["Reactive"]] %>% filter(avg_log2FC > 0.58) %>% pull(gene) %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)]
+)
+
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE)
+organism <- org.Mm.eg.db; background <- rownames(mg.seurat[["SCT"]])
+ORA.list <- lapply(diff.reac.list, function(x) enrichGO(gene          = x, # list of genes 
+                                                      universe      = background, # 'potential DEGs'
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = organism,
+                                                      ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01, #
+                                                      qvalueCutoff  = 0.2,
+                                                      readable      = F,
+                                                      minGSSize     = 5) %>% clusterProfiler::simplify()
+                   )
+
+ORA.list %>% write.xlsx(file = file.path(ws, "ORAlist_sn_ourReactive_vs_Homeo.xlsx"), overwrite = T)
+
+## selecting terms for the barplot
+terms <- c(
+           ## BP
+           "GO:1905952", # regulation of lipid localization
+           "GO:0030335", # positive regulation of cell migration
+           "GO:0048771", # tissue remodeling
+           "GO:1903530", # regulation of secretion by cell
+           "GO:0050670", # regulation of lymphocyte proliferation
+           
+           ## CC
+           "GO:0030312", # external encapsulating structure
+           "GO:0030055", # cell-substrate junction
+           
+           
+           ## MF
+           "GO:0005178", # integrin binding
+           "GO:0071813", # lipoprotein particle binding
+           "GO:0050839" # cell adhesion molecule binding
+           )
+
+{
+  population <- "Reactive"
+  subset.ORA <- ORA.list[[population]]@result %>% filter(ID %in% terms)
+  ORA.data <- data.frame(
+    'Description' = subset.ORA[["Description"]] %>% stringr::str_to_title(),
+    'Pval' = subset.ORA[["p.adjust"]] %>% log10 %>% '*'(-1))
+  ORA.data$Description %<>% factor(levels = rev(unique(.)))
+  rm(subset.ORA)
+  
+  (ggplot(data = ORA.data, aes(x = Description, y = Pval)) + 
+    geom_bar(stat = "identity", width = 0.6, size = 0.2, colour = "black", alpha = 0.75, fill = col.list[["mg_cols"]][[population]]) +
+    ylim(0, max(ORA.data$Pval) + 1) + 
+    geom_hline(yintercept = 1.3, size = 0.2) +
+    coord_flip() +
+    theme(text = element_text(family = "OpenSans", size = 40), 
+          axis.text.x = element_text(vjust = 1, size = 40),
+          axis.text.y = element_text(vjust = 0.5, size = 40, color = 'black'),
+          axis.ticks = element_blank(),
+          panel.background = element_blank(), #transparent panel bg
+          plot.background = element_blank(), #transparent plot bg 
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2)
+          ) +  
+          xlab("") + ylab(expression(paste("-log(Padj)")))) %>% ggsave(filename = paste0(ws, "/Barplot_sn_mg_GO_", population, ".tiff"), device = "tiff", dpi = 300, width = 7, height = 5)
+}
+```
+
+Single-nucleus signature in the spatial data.
+```{r Spatial plot of sn signatures}
+mg.seurat.markers <- read_all_sheets(file.path(ws, "Markers_sn_MG.xlsx"))
+
+## add to spatial data
+mg.names <- paste0("snMG_", names(mg.seurat.markers)); top.mg.markers <- lapply(names(mg.seurat.markers), function(mg){glist <- mg.seurat.markers[[mg]][["gene"]] %>% head(15); return(glist)}); names(top.mg.markers) <- names(mg.seurat.markers)
+spatial.seurat %<>% AddModuleScore(features = top.mg.markers, name = mg.names)
+spatial.seurat[[]] %>% names %>% tail ## last two are our sn mg populations
+
+## plot the spatial plot alone
+lapply(c("snMG_homeostatic1", "snMG_Reactive2"), function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2)
+  print(feature.name)
+  minmax <- c(min(spatial.seurat[[feature]]), max(spatial.seurat[[feature]]))
+  (spatial.seurat %>% 
+      SpatialPlot(features = feature, crop = F, pt.size = 1.35, alpha = c(0.8, 1), images = c('sham', 'D1', 'D3', 'D7'), image.alpha = 0, stroke = 0.01) & 
+      theme(text = element_text(family = plot.font, size = 9), legend.key.size = unit(0.2, 'cm')) #& NoLegend() 
+    & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdGy", n = 9) %>% rev, limits = minmax)
+    ) %>% 
+  ggsave(filename = paste0(ws, "/SpatialPlot_snMG_", feature.name, ".tiff"), device = 'tiff', dpi = 300, width = 18, height = 6, units = 'cm')
+})
+
+## plot the combined spatial+vln plot
+lapply(c("snMG_homeostatic1", "snMG_Reactive2"), function(features){
+  pairs <- lapply(c('sham', 'D1', 'D3', 'D7'), function(time){
+    subset.spatial <- spatial.seurat %>% subset(subset = Condition == time)
+    minmax <-  c(spatial.seurat[[features]] %>% min, spatial.seurat[[features]] %>% max)
+    p1 <- subset.spatial %>% SpatialPlot(features = features, images = time, image.alpha = 0.2, crop = F, max.cutoff = 'q99', pt.size.factor = 1.5, stroke = 0.05, alpha = c(0.5, 1)) & viridis::scale_fill_viridis(option = 'rocket', direction = -1, end = 0.95, limits = minmax) & labs(fill = features) & NoLegend() &
+      theme(text = element_text(family = "OpenSans", size = 16), axis.text = element_text(family = 'OpenSans', size = 10), 
+            plot.margin = unit(c(0,0,0,0), "cm"), 
+            plot.background = element_blank(), 
+            panel.background = element_blank())
+    
+    p2 <- VlnPlot(subset.spatial, features = features, pt.size = 0, group.by = "DetailedRegionAnnoShort", cols = col.list[["cols_mono_short"]], ncol = 1) & coord_flip() & scale_y_continuous(breaks = scales::breaks_pretty(n = 3)) & xlab("") & labs(title = "") & ylim(minmax) &
+    theme(axis.text.x = element_text(family = 'OpenSans', angle = 30, size = 5, hjust = 0.7, vjust = 0.8), 
+          axis.text.y = element_text(family = 'OpenSans', size = 10),
+          text = element_text(family = "OpenSans", size = 25), 
+          legend.position = "none", 
+          plot.margin = unit(c(0, 0.3, 0.3, 0), "cm"),
+          plot.background = element_blank(), 
+          panel.background = element_blank())
+    p <- grid.arrange(p1, p2, ncol = 2, widths = c(1,0.5))
+  })
+  feature.name <- features %>% stringr::str_sub(end = -2)
+  gridExtra::grid.arrange(grobs = pairs, ncol = 4) %>% ggsave(filename = paste0(ws, "/SpatialPlot_VlnPlot_snMG_", feature.name, ".tiff"), device = 'tiff', dpi = 300, bg = NULL, width = 20, height = 4)
+})
+```
+
+Comparing the reactive population with the published datasets.
+```{r metanalysis}
+metadata.list.full <- read_all_sheets(file = "data/SupplementaryTable4_Metanalysis_GlialReactivityMarkers.xlsx") %>% 
+  .[names(.) %>% grep(pattern = "_MG_", ignore.case = T)] ## keep the microglia-related populations
+
+metadata.list <- lapply(names(metadata.list.full), function(meta){ ##keeping genes that are in our normalized matrix
+  positions <- metadata.list.full[[meta]][[1]] %in% (mg.seurat@assays$SCT %>% rownames())
+  keepgenes <- metadata.list.full[[meta]][[1]][positions]
+  return(keepgenes)
+}); names(metadata.list) <- names(metadata.list.full)
+
+## our sn TAM markers
+ourTAMs <- read_all_sheets(file = file.path(ws, "Markers_sn_MG.xlsx"))[["SN_MG_Reactive"]] %>% 
+  filter(p_val_adj < 0.01 & avg_log2FC > 0.58)
+rmg.markers <- ourTAMs %>% pull(gene)
+
+meta.intersects <- lapply(names(metadata.list), function(meta){
+  paste0("Length of metadataset ", meta, " is ",  metadata.list[[meta]] %>% length, " genes.") %>% print
+  int <- intersect(rmg.markers, metadata.list[[meta]]) %>% length
+  paste0("Intersection is ", int) %>% print
+  return(int)
+  }); names(meta.intersects) <- names(metadata.list)
+
+
+
+## signif testing
+meta.signif <- lapply(names(meta.intersects), function(meta){
+  subset.reac.mg <- mg.seurat %>% subset(subset = cell_type_2 == "Reactive")
+  background.size <- ((subset.reac.mg@assays$RNA %>% rowSums()) > 10) %>% sum ##background gene set size with UMI counts > 10
+  print(background.size)
+  intersection <- meta.intersects[[meta]]
+  meta.set.size <- metadata.list[[meta]] %>% length
+  
+  phyper(
+  q = intersection - 1,  ## number of red marbles in the draw -1 (see below)
+  m = meta.set.size, ## number of red marbles in urn
+  n = background.size - meta.set.size, ## number of green marbles in urn
+  k = rmg.markers %>% length, ## number of drawn marbles
+  lower.tail = FALSE ## compute P(X > overlap), hence the '-1' in the q argument
+) -> test
+  return(test)
+}); names(meta.signif) <- names(meta.intersects); meta.signif %<>% p.adjust(method = "fdr")
+meta.signif; meta.signif < 0.01  ## see results; all below
+
+
+# Reactive mg and SF's ARMs ####
+## What genes/processing are different between our and ARM microglia?
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE); organism <- org.Mm.eg.db
+subset.reac.mg <- mg.seurat %>% subset(subset = cell_type_2 == "Reactive")
+background <- rownames(subset.reac.mg@assays$RNA)[((subset.reac.mg@assays$RNA %>% rowSums()) > 10)] ##background gene set size with UMI counts > 10
+
+## Unique genes+processes in our reactive MG
+int.genes <- intersect(rmg.markers, metadata.list[["SF2019_MG_ARM_5XFAD"]])
+rmg.markers.unique <- rmg.markers[!(rmg.markers %in% int.genes)] 
+rmg.markers.unique
+GO.rmg.markers.unique <- enrichGO(gene          = rmg.markers.unique, # list of genes 
+                                  universe      = background, # 'potential DEGs'
+                                  keyType       = "SYMBOL", # or ENSEMBL
+                                  OrgDb         = organism,
+                                  ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                  pAdjustMethod = "fdr",
+                                  pvalueCutoff  = 0.01, 
+                                  qvalueCutoff  = 0.2,
+                                  readable      = F,
+                                  minGSSize     = 5) %>% clusterProfiler::simplify()
+View(GO.rmg.markers.unique@result)
+
+## Unique genes+processes in SF's ARMs
+arm.markers.unique <- metadata.list[["SF2019_MG_ARM_5XFAD"]][!(metadata.list[["SF2019_MG_ARM_5XFAD"]] %in% int.genes)]
+arm.markers.unique
+GO.arm.markers.unique <- enrichGO(gene          = arm.markers.unique, # list of genes 
+                                  universe      = background, # 'potential DEGs'
+                                  keyType       = "SYMBOL", # or ENSEMBL
+                                  OrgDb         = organism,
+                                  ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                  pAdjustMethod = "fdr",
+                                  pvalueCutoff  = 0.01, 
+                                  qvalueCutoff  = 0.2,
+                                  readable      = F,
+                                  minGSSize     = 5) %>% clusterProfiler::simplify()
+View(GO.arm.markers.unique@result)
+
+
+## Metadatasets in spatial ####
+## add metadata
+spatial.seurat %<>% AddModuleScore(features = metadata.list, name = metadata.list %>% names)
+features <- names(metadata.list) %>% paste0(., seq(1:length(.))) ## feature names as they are added
+identical(features, spatial.seurat[[]] %>% names %>% tail(length(features))) ## TRUE = vector names are identical
+
+## correlation our TAMs and SF's ARM
+spatial.seurat %<>% AddModuleScore(features = list(rmg.markers %>% head(15)), name = "snMG_Reac")
+
+spatial.seurat[[]] %>% names
+df <- data.frame(
+  "Reactive" = spatial.seurat$snMG_Reac1,
+  "SF_ARM" = spatial.seurat$SF2019_MG_ARM_5XFAD1
+)
+
+cor.test(x = df$Reactive, y = df$SF_ARM, method = "spearman")
+plot(x = df$Reactive, y = df$SF_ARM)
+
+(ggplot(data = df, aes(x = Reactive, y = SF_ARM)) + 
+  geom_point(aes(color = Reactive), size = 0.5) + scale_color_gradientn(colors = c("#FC9272","#A50F15")) + xlab("Reactive Microglia signature") + ylab("ARM signature") + 
+  geom_smooth(method = 'lm', se = F, color = "black") + theme_light()+ theme(axis.title = element_text(size = 20, family = "OpenSans")) + NoLegend()) %>% ggsave(filename = file.path(ws, "ScatterPlot_TAM_SFarm.tiff"), device = 'tiff', dpi = 300, height = 6, width = 6, units = "cm")
+
+
+## spatialplot
+features
+## plot the spatial plot alone
+lapply(c("SF2019_MG_ARM_5XFAD1", "SF2019_MG_IRM_5XFAD1"), function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2)
+  print(feature.name)
+  minmax <- c(min(spatial.seurat[[feature]]), max(spatial.seurat[[feature]]))
+  (spatial.seurat %>% 
+      SpatialPlot(features = feature, crop = F, pt.size = 1.35, alpha = c(0.8, 1), images = c('sham', 'D1', 'D3', 'D7'), image.alpha = 0, stroke = 0.01) & 
+      theme(text = element_text(family = plot.font, size = 9), legend.key.size = unit(0.2, 'cm')) #& NoLegend() 
+    & ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdGy", n = 9) %>% rev, limits = minmax)
+    ) %>% 
+  ggsave(filename = paste0(ws, "/SpatialPlot_metanalysis_", feature.name, ".tiff"), device = 'tiff', dpi = 300, width = 18, height = 6, units = 'cm')
+})
+
+```
+
+MG markers expression in UMAP
+```{r Feature plot}
+{# plotting microglial markers
+features <- c("Csf1r", "Cd68", 'Hexb', 'Aif1', 'Lyz2', 'Spp1', 'Cst7', 'Cenpa', 'B2m', "Ctsb", 'Apoe')
+lapply(features, function(feature){
+  p <- (mg.seurat %>% 
+      FeaturePlot(features = feature, label = T, pt.size = 1, max.cutoff = 'q99')) &
+      theme(text = element_text(family = 'OpenSans')) &
+      viridis::scale_color_viridis(option = 'rocket', direction = -1, alpha = 1, end = 0.9)
+  p %>% ggsave(filename = paste0(ws, "/FeaturePlot_mg_marker_", feature, ".tiff"), device = 'tiff', dpi = 300, width = 8, height = 8, units = 'cm')
+})
+}
+```
+
+MG markers expression in the spatial plot
+```{r Spatial plot}
+{## spatial plot of microglial markers
+  features <- c("Csf1r", "Cd68", 'Hexb', 'Aif1', 'Lyz2', 'Spp1', 'Cst7', 'Cenpa', 'B2m', 'Ctsb', 'Apoe', 'Trem2')
+  lapply(features, function(feature){
+    minmax <- c(spatial.seurat@assays$SCT[feature] %>% min, spatial.seurat@assays$SCT[feature] %>% max)
+    p <- (spatial.seurat %>% 
+      SpatialPlot(features = feature, crop = F, pt.size.factor = 1.5, image.alpha = 0.2, alpha = c(0.8, 1), stroke = 0) & 
+      NoLegend() &
+      theme(text = element_text(family = 'OpenSans')) & ggplot2::scale_fill_gradientn(colours = brewer.pal(n = 11, name = "RdBu") %>% rev)
+    )
+    p %>% ggsave(filename = paste0(ws, "/SpatialPlot_mg_marker_", feature, ".tiff"), device = 'tiff', dpi = 300, width = 20, height = 5, units = 'cm')
+  })
+}
+```
+
+
+=== Oligodendrocytes ===
+## single-nucleus OLs
+ 
+```{r ol results and plot lists}
+oligo.results <- list()
+oligo.plots <- list()
+```
+
+```{r subset and processing sn OLs}
+sn.seurat %<>% SetIdent(value = "Celltypes")
+oligo.seurat <- subset(sn.seurat, idents = c("OLs", "OPCs"))
+
+# Normalize and scale
+{
+  DefaultAssay(oligo.seurat) <- "RNA"
+  oligo.seurat %<>% NormalizeData(normalization.method = "LogNormalize", verbose = T)
+  oligo.seurat %<>% FindVariableFeatures(selection.method = "vst", nfeatures = 3000)
+  oligo.seurat %<>% ScaleData()
+}
+
+# Explore gene distribution across cells
+oligo.seurat[["RNA"]]@counts %>% rowSums() %>% summary
+oligo.seurat[["RNA"]]@counts %>% rowSums() %>% sort(decreasing = T) %>% head(50) ## the most expressed genes overall
+
+# Gene presence and variability in cells
+oligo.results[["GenesAboveFive"]] <- (oligo.seurat[["RNA"]]@counts %>% rowSums()) %>% .[. >= 5 ] ## no genes in >= 5 cells
+oligo.results[["rna_varfeat"]] <- oligo.seurat %>% HVFInfo(assay = "RNA")
+oligo.results[["rna_varfeat"]] %>% arrange(desc(variance.standardized)) %>% top_n(20)
+selected.var.features <- oligo.results[["rna_varfeat"]] %>% dplyr::filter(variance.standardized >= 1.5) %>% rownames ## highly variable genes
+((selected.var.features %in% names(oligo.results[["GenesAboveFive"]])) %>% sum) / length(selected.var.features) ## >99% of var genes are present in at least five cells
+
+oligo.results[["GenesAboveFive"]] %>% .[names(.) %in% selected.var.features] %>% hist(breaks = 1000)
+
+# PCA
+{
+  oligo.seurat %<>% RunPCA(assay = "RNA", features = selected.var.features, npcs = 50, verbose = T)
+  oligo.seurat %>% DimPlot(reduction = "pca", dims = c(1,2), cols = col.list$Celltypes)
+  oligo.seurat %>% ElbowPlot(ndims = 50) | oligo.seurat %>% PC_var_explained()
+  oligo.seurat %>% DimHeatmap(cells = 200, reduction = "pca", balanced = T, dims = 1:15)
+}
+
+# the 3D PCA
+{
+  dims <- c(1, 2, 3) ## PCs to plot
+  df <- data.frame(
+      "ElementName" = oligo.seurat@reductions$pca@cell.embeddings %>% rownames(),
+      "X" = oligo.seurat@reductions$pca@cell.embeddings[, dims[1]],
+      "Y" = oligo.seurat@reductions$pca@cell.embeddings[, dims[2]],
+      "Z" = oligo.seurat@reductions$pca@cell.embeddings[, dims[3]],
+      "Annotation" = oligo.seurat[["CelltypesDetailed"]]
+  )
+  df %<>% sample_n(size = 1000) # (optional) to increase plotting speed
+  df %>% plot_ly(x = .[["X"]], y = .[["Y"]], z = .[["Z"]], type="scatter3d", mode = "markers", color = .[["Annotation"]], colors = col.list$CelltypesDetailed)
+}
+
+## UMAP
+pc_dims <- 1:10
+{
+  oligo.seurat %<>% RunUMAP(reduction = "pca", dims = pc_dims, verbose = T)
+  oligo.seurat %>% DimPlot(reduction = "umap", group.by = "CelltypesDetailed", label = T, cols = col.list$CelltypesDetailed)
+}
+
+## Clustering 
+{
+  oligo.seurat %<>% FindNeighbors(reduction = "pca", dims = pc_dims, verbose = T)
+  for(res in c(0.6, 0.8, 1, 1.2, 1.4)){
+   oligo.seurat %<>% FindClusters(resolution = res, algorithm = 1, verbose = T) 
+  }
+}
+
+oligo.plots[["UMAP_RNA_res1.4"]] <- oligo.seurat %>% 
+  DimPlot(reduction = "umap", pt.size = 1, group.by = "RNA_snn_res.1.4", cols = col.list$big_col_palette, label = T)
+
+oligo.seurat %>% FeaturePlot(features = "Serpina3n", pt.size = 1.5)
+
+oligo.seurat %>% dittoPlot(var = "Tnfrsf12a", group.by = "RNA_snn_res.1.4", plots = c("vlnplot", "boxplot", "jitter"))
+```
+ 
+```{r markers}
+DefaultAssay(oligo.seurat) <- "RNA"
+oligo.seurat %<>% SetIdent(value = "RNA_snn_res.1.4")
+
+oligo.results[["markers_RNAres1.4"]] <- FindAllMarkers(oligo.seurat, logfc.threshold = 1, assay = 'RNA', verbose = T, only.pos = T) %>% 
+  arrange(p_val_adj) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  split(f = .[["cluster"]])
+
+```
+
+```{r Annotating sn OLs}
+canonical.features <- c(
+  "Plp1", "Mobp", ## OL-lineage cells
+  "Nckap5", "Tcf7l2", ## NFOL
+  "Sepp1", "S100b", ## MOL2
+  "Opalin", "Ptgds", ## MOL5/6
+  "Ifi27", "H2-D1", ## IFN-responsive
+  "Serpina3n", "Klk6", ## MOL DA1
+  "Tnfrsf12a", "Cdkn1a" ## MOL DA2
+)
+
+oligo.plots[["FeaturePlots_sn_CanonicalMarkers"]] <- oligo.seurat %>% 
+  FeaturePlot(features = canonical.features, max.cutoff = 'q99', repel = T, label.size = 3, slot = "data",
+  reduction = "umap", label = T, raster = F, pt.size = 0.2, ncol = 5, cols = c("white", "#AE0900")) & NoAxes() & NoLegend()
+
+
+oligo.seurat@meta.data %<>% mutate("OLCelltypes" = factor(case_when(
+  RNA_snn_res.1.4 == 0 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 1 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 2 ~ "MOL2", 
+  RNA_snn_res.1.4 == 3 ~ "MOL2", 
+  RNA_snn_res.1.4 == 4 ~ "OPCs",
+  RNA_snn_res.1.4 == 5 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 6 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 7 ~ "NFOLs", 
+  RNA_snn_res.1.4 == 8 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 9 ~ "OPCs", 
+  RNA_snn_res.1.4 == 10 ~ "MOL_DA1", 
+  RNA_snn_res.1.4 == 11 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 12 ~ "OPCs"
+), levels = c("OPCs", "NFOLs", "MOL2", "MOL5/6", "MOL_DA1")))
+
+oligo.seurat %<>% SetIdent(value = "OLCelltypes")
+```
+
+```{r Plotting sn OLs}
+oligo.results[["UMAP_snOLs_RNAres1.4"]] <- oligo.seurat %>% DimPlot(group.by = "RNA_snn_res.1.4", pt.size = 1)
+
+oligo.plots[["UMAP_snOLs_OLCelltypes"]] <- oligo.seurat %>% 
+  DimPlot(group.by = "OLCelltypes", pt.size = 1.5, cols = col.list$ol_cols, label = T, label.box = 5,  label.size = 5) & NoAxes() & theme(legend.position = "none")
+
+oligo.plots[["Barplot_snOLs_Conditions_byOLCelltypes"]] <- oligo.seurat %>% 
+  dittoBarPlot(var = "Condition", group.by = "OLCelltypes", color.panel = col.list[["Condition"]], retain.factor.levels = T) 
+```
+
+```{r save sn OLs}
+saveRDS(oligo.seurat, file = "data/Seurat_snOLs_ReadyForIntegration.Rds")
+```
+
+## single-cell OLs
+
+Subset and processing sc OLs
+```{r subset and processing sc OLs}
+oligo.integrated <- readRDS("data/seurat_OLIGO_integrated_UMAP_named.rds")
+oligo.integrated %<>% subset(subset = orig.ident == "scRNA_MCAO_all")
+
+ol.assay <- oligo.integrated %>% GetAssayData(assay = "RNA", layer = "counts")
+ol.metadata <- oligo.integrated@meta.data[c("orig.ident", "Sample", "Condition", "Doublet", "cell_type_1","Phase", "percent.mt", "percent.rib", "scsnOLAnno")]
+
+oligo.seurat.sc <- CreateSeuratObject(counts = ol.assay, meta.data = ol.metadata, project = "Zucha2023_scOLs")
+oligo.seurat.sc %<>% subset(subset = Doublet == "Singlet")
+oligo.seurat.sc %<>% SetIdent(value = "scsnOLAnno")
+
+# Normalize and scale
+{
+  DefaultAssay(oligo.seurat.sc) <- "RNA"
+  oligo.seurat.sc %<>% NormalizeData(normalization.method = "LogNormalize", verbose = T)
+  oligo.seurat.sc %<>% FindVariableFeatures(selection.method = "vst", nfeatures = 3000)
+  oligo.seurat.sc %<>% ScaleData()
+}
+
+# Explore gene distribution across cells
+oligo.seurat.sc[["RNA"]]@counts %>% rowSums() %>% summary
+oligo.seurat.sc[["RNA"]]@counts %>% rowSums() %>% sort(decreasing = T) %>% head(50) ## the most expressed genes overall
+
+# Gene presence and variability in cells
+oligo.results[["GenesAboveFive"]] <- (oligo.seurat.sc[["RNA"]]@counts %>% rowSums()) %>% .[. >= 5 ] ## no genes in >= 5 cells
+oligo.results[["rna_varfeat"]] <- oligo.seurat.sc %>% HVFInfo(assay = "RNA")
+oligo.results[["rna_varfeat"]] %>% arrange(desc(variance.standardized)) %>% top_n(20)
+selected.var.features <- oligo.results[["rna_varfeat"]] %>% dplyr::filter(variance.standardized >= 1.5) %>% rownames ## highly variable genes
+((selected.var.features %in% names(oligo.results[["GenesAboveFive"]])) %>% sum) / length(selected.var.features) ## >99% of var genes are present in at least five cells
+
+oligo.results[["GenesAboveFive"]] %>% .[names(.) %in% selected.var.features] %>% hist(breaks = 1000)
+
+# PCA
+{
+  oligo.seurat.sc %<>% RunPCA(assay = "RNA", features = selected.var.features, npcs = 50, verbose = T)
+  oligo.seurat.sc %>% DimPlot(reduction = "pca", dims = c(1,2), cols = col.list$big_col_palette)
+  oligo.seurat.sc %>% ElbowPlot(ndims = 50) | oligo.seurat.sc %>% PC_var_explained()
+  oligo.seurat.sc %>% DimHeatmap(cells = 200, reduction = "pca", balanced = T, dims = 1:15)
+}
+
+# the 3D PCA
+{
+  dims <- c(1, 2, 3) ## PCs to plot
+  df <- data.frame(
+      "ElementName" = oligo.seurat.sc@reductions$pca@cell.embeddings %>% rownames(),
+      "X" = oligo.seurat.sc@reductions$pca@cell.embeddings[, dims[1]],
+      "Y" = oligo.seurat.sc@reductions$pca@cell.embeddings[, dims[2]],
+      "Z" = oligo.seurat.sc@reductions$pca@cell.embeddings[, dims[3]],
+      "Annotation" = oligo.seurat.sc[["scsnOLAnno"]]
+  )
+  df %<>% sample_n(size = 1000) # (optional) to increase plotting speed
+  df %>% plot_ly(x = .[["X"]], y = .[["Y"]], z = .[["Z"]], type="scatter3d", mode = "markers", color = .[["Annotation"]], colors = col.list$ol_cols)
+}
+
+
+## UMAP
+pc_dims <- 1:10
+{
+  oligo.seurat.sc %<>% RunUMAP(reduction = "pca", dims = pc_dims, verbose = T)
+  oligo.seurat.sc %>% DimPlot(reduction = "umap", group.by = "scsnOLAnno", label = T, cols = col.list$ol_cols)
+}
+
+## Clustering 
+{
+  oligo.seurat.sc %<>% FindNeighbors(reduction = "pca", dims = pc_dims, verbose = T)
+  for(res in c(0.6, 0.8, 1, 1.2, 1.4)){
+   oligo.seurat.sc %<>% FindClusters(resolution = res, algorithm = 1, verbose = T) 
+  }
+}
+
+oligo.seurat.sc %<>% SetIdent(value = "RNA_snn_res.1.4")
+
+oligo.plots[["UMAP_sc_RNA_res1.4"]] <- oligo.seurat.sc %>% 
+  DimPlot(reduction = "umap", pt.size = 1, group.by = "RNA_snn_res.1.4", cols = col.list$big_col_palette, label = T)
+
+```
+
+```{r Annotating sc OLs}
+canonical.features <- c(
+  "Plp1", "Mobp", ## OL-lineage cells
+  "Nckap5", "Tcf7l2", ## NFOL
+  "Sepp1", "S100b", ## MOL2
+  "Opalin", "Ptgds", ## MOL5/6
+  "Ifi27", "H2-D1", ## IFN-responsive
+  "Serpina3n", "Klk6", ## MOL DA1
+  "Tnfrsf12a", "Cdkn1a" ## MOL DA2
+)
+
+oligo.plots[["FeaturePlots_sc_CanonicalMarkers"]] <- oligo.seurat.sc %>% 
+  FeaturePlot(features = canonical.features, max.cutoff = 'q99', repel = T, label.size = 3, slot = "data",
+  reduction = "umap", label = T, raster = F, pt.size = 0.2, ncol = 5, cols = c("white", "#AE0900")) & NoAxes() & NoLegend()
+
+
+oligo.seurat.sc@meta.data %<>% mutate("OLCelltypes" = factor(case_when(
+  RNA_snn_res.1.4 == 0 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 1 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 2 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 3 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 4 ~ "MOL2",
+  RNA_snn_res.1.4 == 5 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 6 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 7 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 8 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 9 ~ "MOL2", 
+  RNA_snn_res.1.4 == 10 ~ "MOL_DA1", 
+  RNA_snn_res.1.4 == 11 ~ "MOL5/6", 
+  RNA_snn_res.1.4 == 12 ~ "MOL5/6",
+  RNA_snn_res.1.4 == 13 ~ "MOL_DA2",
+  RNA_snn_res.1.4 == 14 ~ "MOL2"
+), levels = c("MOL2", "MOL5/6", "MOL_DA1", "MOL_DA2")))
+
+
+oligo.seurat.sc %<>% SetIdent(value = "OLCelltypes")
+```
+
+```{r Plotting sc OLs}
+oligo.results[["UMAP_scOLs_RNAres1.4"]] <- oligo.seurat.sc %>% DimPlot(group.by = "RNA_snn_res.1.4", pt.size = 1)
+
+oligo.plots[["UMAP_scOLs_OLCelltypes"]] <- oligo.seurat.sc %>% 
+  DimPlot(group.by = "OLCelltypes", pt.size = 1.5, cols = col.list$ol_cols, label = T, label.box = 5,  label.size = 5) & NoAxes() & theme(legend.position = "none")
+
+oligo.plots[["Barplot_scOLs_Conditions_byOLCelltypes"]] <- oligo.seurat.sc %>% 
+  dittoBarPlot(var = "Condition", group.by = "OLCelltypes", color.panel = col.list[["Condition"]], retain.factor.levels = T) 
+```
+
+```{r save sc OLs}
+saveRDS(oligo.seurat.sc, file = "data/Seurat_scOLs_ReadyForIntegration.Rds")
+```
+
+## Integration of sn and sc Oligos
+```{r load respective ol seurats v4}
+oligo.seurat <- readRDS("data/Seurat_snOLs_ReadyForIntegration.Rds")
+oligo.seurat$OLCelltypes %>% table
+oligo.seurat %<>% subset(subset = OLCelltypes != "OPCs")
+
+oligo.seurat.sc <- readRDS("data/Seurat_scOLs_ReadyForIntegration.Rds")
+oligo.seurat.sc$OLCelltypes %>% table
+
+options(Seurat.object.assay.version = "v5")
+
+seurat.list <- list(
+  "sn" = oligo.seurat,
+  "sc" = oligo.seurat.sc
+)
+```
+
+The seurats were prepared as in Seurat v4 but for smoother integration and dataset longevity we transform them to v5.
+```{r transform seurats v4->v5}
+## clean up and convert to v5
+seuratv5.list <- lapply(seurat.list, function(x){
+  DefaultAssay(x) <- "RNA"
+  x %<>% DietSeurat(assays = "RNA", layers = "counts")
+  assay5 <- as(x[["RNA"]], Class = "Assay5")
+  seurat5 <- CreateSeuratObject(assay5, meta.data = x@meta.data)
+  return(seurat5)
+})
+
+##merge into a single big seurat v5 object
+names(seuratv5.list)
+merged.seurat <- merge(seuratv5.list[["sn"]], 
+                      seuratv5.list[["sc"]])
+
+## keep non-NA metadata and merge the count matrix
+merged.seurat@meta.data %<>% .[ , colSums(is.na(.)) == 0]
+merged.seurat %<>% JoinLayers()
+Idents(merged.seurat) <- "orig.ident"
+
+## non-near-zero genes that are in >= 5 cells with >= 5 counts
+genes.to.keep <- base::intersect(rownames(merged.seurat[["RNA"]]$data)[(merged.seurat[["RNA"]]$data %>% rowSums()) >= 5], ## genes with >= 5 counts
+                                 rownames(merged.seurat[["RNA"]]$data)[((merged.seurat[["RNA"]]$data > 0) %>% rowSums()) >= 5] ## genes present in >= 5 cells
+                                 )
+
+## split based on the sequencing batches
+merged.seurat[["RNA"]] <- split(merged.seurat[["RNA"]], f = merged.seurat$orig.ident)
+```
+
+```{r Process without integration}
+# Normalize, Scale, FindVariableFeatures
+{
+  gc(full = T)
+  merged.seurat %<>% NormalizeData()
+  merged.seurat %<>% ScaleData(features = genes.to.keep)
+  merged.seurat %<>% FindVariableFeatures(nfeatures = 3000, verbose = T)
+}
+
+# PCA
+{
+  merged.seurat %<>% RunPCA(npcs = 50, verbose = T)
+  merged.seurat %>% PCAPlot(group.by = "orig.ident", cols = col.list$big_col_palette, raster = F, shuffle = T) + NoLegend()
+}
+
+# PCA QC
+PC_var_explained(Seurat = merged.seurat) | merged.seurat %>% ElbowPlot(ndims = 50)
+merged.seurat %>% DimHeatmap(dims = 1:15, cells = 300, balanced = TRUE)
+merged.seurat %>% DimHeatmap(dims = 16:30, cells = 300, balanced = TRUE)
+
+# UMAP
+pca.dims <- 1:15
+{
+  merged.seurat %<>% RunUMAP(dims = pca.dims, reduction = "pca",  verbose = T, reduction.name = "umap_unintegrated")
+  merged.seurat %>% DimPlot(reduction = "umap_unintegrated", group.by = 'orig.ident', cols = col.list$big_col_palette, raster = F, combine = T, shuffle = T) ## strong batch effect is present
+}
+```
+
+Strong technical batch-effect is present. Let's integrate
+```{r Integrate}
+gc(full = T)
+
+merged.seurat %<>% IntegrateLayers(method = CCAIntegration,
+  orig.reduction = "pca", new.reduction = "cca",
+  verbose = T)
+
+merged.seurat %<>% JoinLayers()
+```
+
+Clusters and UMAP in the integrated OL dataset
+```{r integrated clusters and umap}
+pca.dims <- 1:15
+## cca
+{
+  merged.seurat %<>% FindNeighbors(reduction = "cca", dims = pca.dims) 
+  merged.seurat %<>% FindClusters(resolution = 1.4, cluster.name = "cca_clusters")
+  merged.seurat %<>% RunUMAP(reduction = "cca", dims = pca.dims, reduction.name = "umap.cca")
+}
+
+
+oligo.plots[["UMAP_int_ccaclusters"]] <-  merged.seurat %>% 
+  DimPlot(reduction = "umap.cca", pt.size = 1.5, group.by = "cca_clusters", cols = col.list$big_col_palette, shuffle = T, label = T, label.box = T, label.size = 4) & NoAxes()
+
+oligo.plots[["UMAP_int_OLCelltypes"]] <- merged.seurat %>% 
+  DimPlot(reduction = "umap.cca", pt.size = 1, group.by = "OLCelltypes", cols = col.list$ol_cols, label = T, label.box = T, label.size = 4, shuffle = T)
+merged.seurat %>% DimPlot(reduction = "umap.cca", pt.size = 1, group.by = "orig.ident")
+
+merged.seurat %>% VlnPlot(features = c("Irf7", "H2-D1", "Ifi27"), cols = col.list$big_col_palette)
+merged.seurat %>% VlnPlot(features = c("Serpina3n", "Tnfrsf12a"), cols = col.list$big_col_palette)
+```
+
+CCA integration maintains description observed in the two individual datasets.
+```{r Canonical Markers in the integrated dataset}
+canonical.features <- c(
+  "Plp1", "Mobp", ## OL-lineage cells
+  "Nckap5", "Tcf7l2", ## NFOL
+  "Sepp1", "S100b", ## MOL2
+  "Opalin", "Ptgds", ## MOL5/6
+  "Irf7", "Ifi27", "H2-D1", ## IFN-responsive
+  "Serpina3n", "Klk6", ## MOL DA1
+  "Tnfrsf12a", "Cdkn1a" ## MOL DA2
+)
+
+oligo.plots[["FeaturePlots_int_CanonicalMarkers_cca"]] <- merged.seurat %>% 
+  FeaturePlot(features = canonical.features, max.cutoff = 'q99', repel = T, label.size = 3, slot = "data",
+  reduction = "umap.cca", label = T, raster = F, pt.size = 0.2, ncol = 5, cols = c("white", "#AE0900")) & NoAxes() & NoLegend()
+```
+
+Calculating markers in cca clusters
+```{r OL Markers in cca clusters}
+DefaultAssay(merged.seurat) <- "RNA"
+merged.seurat %<>% SetIdent(value = "cca_clusters")
+
+
+oligo.results[["FindAllMarkers_int_ccaclusters"]] <- FindAllMarkers(merged.seurat, logfc.threshold = 1, assay = 'RNA', verbose = T, only.pos = T) %>% 
+  arrange(p_val_adj) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  split(f = .[["cluster"]])
+```
+
+Annotating the integrated oligo dataset
+```{r annotating integrated OL dataset}
+merged.seurat@meta.data %<>% mutate("intOLSubtypes" = factor(case_when(
+  cca_clusters == 0 ~ "MOL5/6",
+  cca_clusters == 1 ~ "MOL5/6", 
+  cca_clusters == 2 ~ "MOL2", 
+  cca_clusters == 3 ~ "MOL5/6",
+  cca_clusters == 4 ~ "MOL5/6",
+  cca_clusters == 5 ~ "MOL5/6",
+  cca_clusters == 6 ~ "MOL5/6",
+  cca_clusters == 7 ~ "MOL2", 
+  cca_clusters == 8 ~ "MOL5/6", 
+  cca_clusters == 9 ~ "MOL2", 
+  cca_clusters == 10 ~ "MOL_DA1", 
+  cca_clusters == 11 ~ "MOL5/6", 
+  cca_clusters == 12 ~ "MOL_DA2", 
+  cca_clusters == 13 ~ "NFOLs",
+  cca_clusters == 14 ~ "MOL_IFN", 
+  cca_clusters == 15 ~ "MOL5/6"
+), levels = c("NFOLs", "MOL2", "MOL5/6","MOL_IFN",  "MOL_DA1", "MOL_DA2")))
+
+oligo.plots[["UMAP_intOLSubtypes"]] <- merged.seurat %>% DimPlot(
+  reduction = "umap.cca", group.by = "intOLSubtypes", cols = col.list$intOLSubtypes, pt.size = 1.2, shuffle = T
+) & NoAxes()
+```
+
+save integrated annotated Zucha 2023 OLs
+```{r save int anno seurat}
+saveRDS(merged.seurat, file = "data/Seurat_OLs_integrated_annotated.Rds")
+```
+
+## Integrated scsn OLs ----
+
+read integrated annotated Seurat
+```{r read int anno OL seurat}
+seurat <- readRDS(file = "data/Seurat_OLs_integrated_annotated.Rds")
+oligo.plots <- list()
+oligo.results <- list()
+```
+
+Markers of the integrated dataset.
+```{r markers of int OL dataset}
+DefaultAssay(seurat) <- "RNA"
+seurat %<>% SetIdent(value = "intOLSubtypes")
+
+oligo.results[["FindAllMarkers_int_OLSubtypes"]] <- FindAllMarkers(seurat, logfc.threshold = 1, assay = 'RNA', verbose = T, only.pos = T) %>% 
+  arrange(p_val_adj) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  split(f = .[["cluster"]])
+```
+
+Exploratory intOL plots
+```{r Exploratory plots int OL Subtypes}
+# UMAP of intOL Subtypes
+oligo.plots[["UMAP_intOLSubtypes"]] <- seurat %>% DimPlot(
+  reduction = "umap.cca", group.by = "intOLSubtypes", cols = col.list[["intOLSubtypes"]], shuffle = T, pt.size = 2, label = F) + NoAxes() + theme(legend.position = "none") + ggtitle(label = NULL)
+
+# UMAP of intOL Subtypes, split by Condition
+oligo.plots[["UMAP_intOLSubtypes_splitbyCondition"]] <- seurat %>% DimPlot(
+  reduction = "umap.cca", group.by = "intOLSubtypes", split.by = "Condition", cols = col.list[["intOLSubtypes"]], shuffle = T, pt.size = 2, label = F, ncol = 2) & NoAxes() + theme(legend.position = "none", plot.tag  = element_text(size = 25)) + ggtitle(label = NULL)
+
+# barplot counting the number of intOL Subtypes
+oligo.plots[["Barplot_totalcount_intOLSubtypes"]] <- seurat %>% total_barplot(groupvar = "intOLSubtypes", ylim = 4500)
+
+# barplot on proportions of intOL Subtypes between the conditions
+oligo.plots[["Barplot_sidebyside_intOLSubtypes_byCondition"]] <- seurat %>% sidebyside_barplot_percent(var = "intOLSubtypes", group.by = "Condition")
+
+# Barplot OL Subtype presence per condition
+oligo.plots[["Barplot_Condition_vs_intOLSubtypes"]] <- seurat %>% dittoBarPlot(
+  var = "intOLSubtypes", group.by = "Condition", retain.factor.levels = T, color.panel = col.list$intOLSubtypes,main = NULL, y.breaks = c(0.2, 0.4, 0.6, 0.8, 1), xlab = NULL, ylab = "Proportion of cells") + theme(legend.position = "none", axis.text = element_text(size = 25), axis.title = element_text(size = 25))
+
+# UMAP of mito content in OLs
+oligo.plots[["Ridge_MitoContent"]] <-  seurat %>% RidgePlot(
+  features = "percent.mt", idents = c("MOL2", "MOL5/6", "MOL_IFN", "MOL_DA1", "MOL_DA2"), cols = col.list$intOLSubtypes) + theme(legend.position = "none") + 
+  xlab(label = NULL) + 
+  ylab(label = NULL) + 
+  ggtitle(label = "Mitochondrial RNA content [%]")
+```
+
+Markers-related intOL plots
+```{r Markers-related plots}
+# DEG numbers and their mutual overlap
+{
+  oligo.results[["FindAllMarkers_int_OLSubtypes"]][["MOL2"]] %>% slice_min(order_by = p_val_adj, n = 10) ## top p-value sorted MOL2 markers
+  oligo.results[["FindAllMarkers_int_OLSubtypes"]][["MOL5/6"]] %>% slice_min(order_by = p_val_adj, n = 10) ## top p-value sorted MOL5/6 markers
+  ### are MOL2 and MOL5/6 markers found in disease-associated OL populations?
+  oligo.plots[["Ridge_MOL2markers_inMOLDApopulations"]] <-  seurat %>% RidgePlot(
+    features = c("Hopx", "S100b", "Enpp6"), idents = c("MOL2", "MOL_IFN", "MOL_DA1", "MOL_DA2"), cols = col.list$intOLSubtypes) & ylab(label = NULL)
+  oligo.plots[["Ridge_MOL56markers_inMOLDApopulations"]] <- seurat %>% RidgePlot(
+    features = c("Ptgds", "Clmn", "Palm2"), idents = c("MOL5/6", "MOL_IFN", "MOL_DA1", "MOL_DA2"), cols = col.list$intOLSubtypes) & ylab(label = NULL)
+  ### yes, it appears that MOL DA populations arise from both MOL2 and MOL5/6. This makes them comparable for marker calculation.
+  oligo.results[["intOL_DEGs"]] <- lapply(c("MOL_IFN", "MOL_DA1", "MOL_DA2"), function(x){
+    markers <- seurat %>% 
+      FindMarkers(ident.1 = x, ident.2 = c("MOL2", "MOL5/6"), assay = "RNA", logfc.threshold = 1, verbose = T, only.pos = T) %>% 
+      arrange(p_val_adj) %>% 
+      filter(p_val_adj < 0.01)
+    return(markers)
+  }); names(oligo.results[["intOL_DEGs"]]) <- c("MOL_IFN", "MOL_DA1", "MOL_DA2")
+  oligo.results[["intOL_DEGs_genelist"]] <- lapply(oligo.results[["intOL_DEGs"]], function(x){rownames(x)})
+  
+  ## Intersections between the MOL DA DEGs
+  Reduce(intersect, oligo.results[["intOL_DEGs_genelist"]]) # in-between the all three
+  intersect(oligo.results[["intOL_DEGs_genelist"]]$MOL_IFN, oligo.results[["intOL_DEGs_genelist"]]$MOL_DA1)
+  intersect(oligo.results[["intOL_DEGs_genelist"]]$MOL_IFN, oligo.results[["intOL_DEGs_genelist"]]$MOL_DA2)
+  intersect(oligo.results[["intOL_DEGs_genelist"]]$MOL_DA1, oligo.results[["intOL_DEGs_genelist"]]$MOL_DA2)
+}
+
+
+# heatmap of top markers
+{
+  ## select genes of interest
+  oligo.results[["SelectedMarkers"]] <- c(
+    oligo.results$FindAllMarkers_int_OLSubtypes[["NFOLs"]]$gene %>% head(10),
+    oligo.results$FindAllMarkers_int_OLSubtypes[["MOL2"]]$gene %>% head(10),
+    oligo.results$FindAllMarkers_int_OLSubtypes[["MOL5/6"]]$gene %>% head(10),
+    oligo.results$FindAllMarkers_int_OLSubtypes[["MOL_IFN"]]$gene %>% head(30),
+    oligo.results$FindAllMarkers_int_OLSubtypes[["MOL_DA1"]]$gene %>% head(30),
+    oligo.results$FindAllMarkers_int_OLSubtypes[["MOL_DA2"]]$gene %>% head(30)
+  ) %>% unique
+  
+  ## averaging counts per intOL Subtypes cluster
+  oligo.results[["Averaged_Seurat"]] <- seurat %>% AverageExpression(
+    assays = "RNA", return.seurat = T, group.by = "intOLSubtypes", slot = "data", verbose = T)
+  oligo.results[["Averaged_Seurat"]][["intOLSubtypes"]] <- Cells(oligo.results[["Averaged_Seurat"]]) %>% stringr::str_replace_all(pattern = "-", replacement = "_") %>% factor(levels = c("NFOLs", "MOL2", "MOL5/6", "MOL_IFN", "MOL_DA1", "MOL_DA2"))
+  
+  ## plotting the heatmap
+  oligo.plots[["Heatmap_intOLSubtypes_TopMarkers"]] <- oligo.results[["Averaged_Seurat"]] %>% DoHeatmap(
+    features = oligo.results$SelectedMarkers, group.by = "intOLSubtypes", group.bar = T, group.colors = col.list$intOLSubtypes, assay = "RNA", slot = "scale.data", draw.lines = F, angle = 0, hjust = 0.5, combine = T, size = 4) & 
+    theme(axis.text.y = element_text(size = 7)) & 
+    scale_fill_viridis_c(option = "inferno")
+}
+```
+
+Gene Enrichment Analysis and associated plots
+```{r Gene Enrichment Analysis and associated plots}
+oligo.results[["intOL_DEGs_genelist"]] %>% glimpse ## checking we have necessary files ready.
+
+# Enrichment analysis
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE)
+organism <- org.Mm.eg.db; background <- rownames(seurat[["RNA"]]$data)
+
+## convert Gene symbols to entrez IDs (necessary for enrichWP and enrich)
+oligo.results[["intOL_DEGs_entrezIDlist"]] <- lapply(oligo.results[["intOL_DEGs_genelist"]], 
+                                                     function(x) AnnotationDbi::select(organism, 
+                                                                                       keys = x, 
+                                                                                       columns = c("SYMBOL", "ENTREZID"), 
+                                                                                       keytype = "SYMBOL") %>% dplyr::filter(!is.na(ENTREZID)) %>% .[["ENTREZID"]])
+
+## select genes that are found in at least five cells with a minimum of one transcript
+oligo.results[["GenesAboveFive"]] <- rownames(seurat[["RNA"]]$counts)[((seurat[["RNA"]]$counts >= 1) %>% rowSums()) >= 5] ## GeneSymbols of selected genes
+
+oligo.results[["ensemblIDsAboveFive"]] <- oligo.results[["GenesAboveFive"]] %>% 
+  AnnotationDbi::select(x = organism, keys = ., columns = c("SYMBOL", "ENTREZID"), keytype = "SYMBOL") %>% 
+  dplyr::filter(!is.na(ENTREZID)) %>% 
+  .[["ENTREZID"]] ## EntrezIDs of the selective genes
+
+## Gene Ontology analysis
+oligo.results[["enrichGO_list"]] <- lapply(
+  oligo.results[["intOL_DEGs_genelist"]], function(x) enrichGO(gene = x, # list of genes as GeneSymbols
+                                                               universe = oligo.results[["GenesAboveFive"]], # 'potential DEGs'
+                                                               keyType = "SYMBOL", # or ENSEMBL
+                                                               OrgDb = organism,
+                                                               ont = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                                               pAdjustMethod = "fdr",
+                                                               pvalueCutoff = 0.05,
+                                                               qvalueCutoff = 0.2,
+                                                               readable = F,
+                                                               minGSSize = 3) %>% dplyr::filter(p.adjust < 0.05) %>% clusterProfiler::simplify()
+  )
+
+## KEGG Pathways for more general look, as the GO terms can be quite repetitive
+oligo.results[["enrichKEGG_list"]] <- lapply(
+  oligo.results[["intOL_DEGs_entrezIDlist"]], function(x) enrichKEGG(gene = x, # list of genes as entrezIDs
+                                                                 organism = "mmu", 
+                                                                 universe = oligo.results[["ensemblIDsAboveFive"]] , # 'potential DEGs'
+                                                                 keyType = "kegg", 
+                                                                 pvalueCutoff = 0.05, 
+                                                                 pAdjustMethod = "fdr", 
+                                                                 minGSSize = 3) %>% dplyr::filter(p.adjust < 0.05))
+## the KEGG results were however more inconlusive, with many top hits referencing viral infections or cancer progression. On the other hand, especially for MOL_DA2 it pointed for involvement of  ribosomes, apoptosis, spliceosomes, p53 signaling, JAK-STAT pathway.
+
+
+## WikiPathways
+oligo.results[["enrichWP_list"]] <- lapply(
+  oligo.results[["intOL_DEGs_entrezIDlist"]], function(x) enrichWP(gene = x, # list of genes as entrezIDs
+                                                                 organism = "Mus musculus", 
+                                                                 universe = oligo.results[["ensemblIDsAboveFive"]] , # 'potential DEGs'
+                                                                 pvalueCutoff = 0.05, 
+                                                                 pAdjustMethod = "fdr", 
+                                                                 minGSSize = 3) %>% dplyr::filter(p.adjust < 0.05))
+
+## Wiki Pathways results highlights. Compared to enrichGO, the WikiPathways enrichment has not returned many terms, ranging from 1 to 5 per disease-associated MOLs. I wonder how the results would change if we have broadened the search by combining the markers to 
+##  - MOL_IFN: Type II interferon signaling IFN-gamma (WP1253)
+##  - MOL_DA1: Adipogenesis genes (WP447), Oxidative stress response (WP412)
+##  - MOL:DA2: Cytoplasmic ribosomes (WP163), Translation factors (WP307), mRNA processing (WP310), Hyperthropy (WP202)
+
+
+## Considering that GO yielded substantially more enrichment terms, we selected those representative among the enrichments whilst considering the WikiPathways output too.
+
+### for MOL IFN
+oligo.results[["selectedGOs"]] <- list(
+  ## for MOL_IFN, the main theme is the interferon response. But the question remains, whether both IFN type I (IFN-alpha, IFN-beta) and IFN type II (IFN-gamma) are equally involved. The GO analysis is inconclusive, and by investigating their receptors, we see very scarce expression of typeII receptors Ifngr1 and 2 receptors. Although the expression for type I is higher, but this is true only for one of the receptors (Ifnar2).
+  "MOL_IFN" = c("GO:0140888", # IFN-mediated signaling pathway
+                "GO:0060333", # Type-II interferon-mediated signaling pathway (IFN-gamma related)
+                "GO:0019885", # antigen processing and presentation of endogenous peptide antigen via MHC class I
+                "GO:0070721", # ISGF3 complex, Type I interferon response. Possibly related read: https://www.nature.com/articles/s41467-019-10970-y
+                "GO:0030670" # phagocytic vesicle membrane
+                ),
+  
+  # MOL_DA1 is equally interesting population. Alongside the conventional gliosis response, cytoskeleton polymerization, cell division, their response is accompanied by the uptake of surrounding particles.
+  "MOL_DA1" = c("GO:0005200", # structural consitutent of cytoskeleton
+                "GO:0014009", # glial cell proliferation
+                "GO:0051580", # regulation of neurotransmitter uptake
+                "GO:0007259", # receptor signaling via JAK-STAT pathway
+                "GO:0006953", # acute-phase response
+                "GO:0006897" # endocytosis
+                ),
+  # MOL DA2 is the most distinct OL subpopulation. It is most characteristic by substantial upregulation of ribosomal genes and protein stabilization, indicative of sustaining cell growth. Similarly to the two previous populations / cell states, they appear responsive to the inflammatory environment through overexpression of p53, DNA damage control, and p38, IFN type I responder coordinating downstream transcription factor.
+  "MOL_DA2" = c("GO:0022626", # cytosolic ribosome
+                "GO:0072331", # signal transduction by p53 class mediator
+                "GO:0038066", # p38 MAPK cascade
+                "GO:0044183", # protein-folding chaperone
+                "GO:0034620", # cellular response to unfolded protein
+                "GO:0034709", # methylosome
+                "GO:0140296", # general transcription initiation factor binding
+                "GO:0001558" # regulation of cell growth
+                ))
+  
+## For the selected GO terms, collect their entire gene lists so we can visualize the activation on the entire pathway across the cells
+oligo.results[["FullGeneLists_to_selectedGOs"]] <- lapply(oligo.results[["selectedGOs"]], function(keys){
+  genes <- AnnotationDbi::select(x = org.Mm.eg.db, keytype = "GOALL", keys = keys, columns = c("SYMBOL", "ENTREZID", "ENSEMBL", "ONTOLOGY")) %>% 
+    split(f = .[["GOALL"]])
+  return(genes)
+})
+
+## Heatmap of the entire pathways
+oligo.plots[["Heatmaps_SelectedGOterms_FullPathways"]] <- lapply(unlist(oligo.results[["FullGeneLists_to_selectedGOs"]], recursive = F), function(GO){ ### unlist the GO lists out of the DA-specific groupings
+  genes <- GO[["SYMBOL"]][GO[["SYMBOL"]] %in% rownames(seurat@assays[["RNA"]]$data)] ## All genes related to the pathway that are found within the seurat object
+
+  sampled.cells <- seurat %>% WhichCells(idents = c("MOL2", "MOL5/6", "MOL_IFN", "MOL_DA1", "MOL_DA2"), downsample = 100, seed = 2023) ## sample cells for a balanced heatmap
+  ht <- seurat %>% DoHeatmap(
+    assay = "RNA", slot = "scale.data", 
+    group.by = "intOLSubtypes", 
+    features = genes, 
+    cells = sampled.cells,  
+    group.bar = T, 
+    group.colors = col.list$intOLSubtypes, 
+    draw.lines = F, angle = 0, hjust = 0.5, size = 4, 
+    combine = T
+    ) & theme(
+      axis.text.y = element_text(size = 7)
+      ) & scale_fill_viridis_c(
+        option = "rocket", direction = 1
+        )
+  return(ht)
+})
+
+
+
+```
+
+## TF discovery: SCENIC on OLs
+Would it be possible to explore the regulon activity without a separate ATAC-Seq run? [SCENIC](https://github.com/aertslab/SCENIC) is a pipeline that allows to get an initial feeling of TF activity solely from scRNA-seq data. Here, we want to use it to better understand the regulators of cell-state change in OLs.
+
+```{r library}
+library("SCENIC"); packageVersion("SCENIC")
+library("AUCell"); packageVersion("AUCell")
+```
+
+Having run the pyScenic as outlined in the "MCAO_OL_ScenicDocker.Rmd", we can load the results
+```{r load pyScenic results and the OL seurat}
+load(file = './data/pyScenic_scOL_regulons_seurat.RData') # loads the scenic results list and the auc.seurat
+seurat <- readRDS(file = "data/Seurat_OLs_integrated_annotated.Rds"); DefaultAssay(seurat) <- 'RNA' # load the scenic reference dataset
+scenic.results <- list()
+scenic.plots <- list()
+```
+
+Explore the general TF profiles.
+```{r Exploring the AUC Seurat}
+# Average regulon activity per cluster
+average_reg_activity <- function(AUCseurat, ## AUC Seurat as input
+                                 ROI = NULL){ ##Regulons of interest
+  cluster_averages <- AUCseurat %>% 
+    AverageExpression(assays = "AUC", return.seurat = FALSE, group.by = "ident", features = ROI, slot = "counts") %>% 
+    .[[1]] # keep matrix out of the list
+  return(cluster_averages)
+}
+scenic.results[["AverageRegulonActivity"]] <- average_reg_activity(auc.seurat)
+scenic.results[["AverageRegulonActivity"]] %>% head
+
+tf.markers <- auc.seurat %>% FindAllMarkers(assay = "AUC", logfc.threshold = 0.2, min.pct = 0.1, only.pos = T, verbose = T)
+
+# Heatmap of regulon activity
+sampled.cells <- auc.seurat %>% WhichCells(
+  idents = c("MOL2", "MOL5/6", "MOL_IFN", "MOL_DA1", "MOL_DA2"), downsample = 100, seed = 2023) ## sample cells for a balanced heatmap
+
+scenic.plots[["Heatmap_AUCvalues"]] <- auc.seurat %>% DoHeatmap(
+  features = rownames(.), 
+  group.by = "intOLSubtypes", 
+  assay = "AUC", 
+  slot = "scale.data", 
+  label = T, draw.lines = F, angle = 0, hjust = 0.5, size = 4, 
+  cells = sampled.cells, 
+  group.colors = col.list$intOLSubtypes
+  ) & scale_fill_viridis_c(
+        option = "rocket", direction = 1
+        )
+
+```
+
+And watch how the OL injury-assoc. populations get recreteated with regulon activity (auc) scores
+```{r UMAP and clustering on auc values}
+## PCA
+{
+  auc.seurat %<>% FindVariableFeatures(assay = "AUC", verbose = T)
+  auc.seurat %<>% RunPCA(assay = "AUC", features = NULL, npcs = 20, verbose = T, reduction.name = "auc.pca")
+  auc.seurat %>% ElbowPlot(ndims = 20, reduction = "auc.pca")
+  auc.seurat %>% DimHeatmap(cells = 200, reduction = "auc.pca", balanced = T, dims = 1:20)
+}
+
+# exploring PCA
+{
+  auc.seurat %>% DimPlot(reduction = "auc.pca", dims = c(1,2), cols = col.list$intOLSubtypes)
+  auc.seurat %>% DimPlot(reduction = "auc.pca", dims = c(1,3), cols = col.list$intOLSubtypes)
+  auc.seurat %>% DimPlot(reduction = "auc.pca", dims = c(2,3), cols = col.list$intOLSubtypes)
+}
+
+## exploring 3D PCA plot
+{
+  dims <- c(5, 6, 7) ## PCs to plot
+  df <- data.frame(
+      "ElementName" = auc.seurat@reductions$auc.pca@cell.embeddings %>% rownames(),
+      "X" = auc.seurat@reductions$auc.pca@cell.embeddings[, dims[1]],
+      "Y" = auc.seurat@reductions$auc.pca@cell.embeddings[, dims[2]],
+      "Z" = auc.seurat@reductions$auc.pca@cell.embeddings[, dims[3]],
+      "Annotation" = auc.seurat$intOLSubtypes
+  )
+  df %<>% sample_n(size = 1000) # (optional) to increase plotting speed
+  df %>% plot_ly(x = .[["X"]], y = .[["Y"]], z = .[["Z"]], type="scatter3d", mode = "markers", color = .[["Annotation"]], colors = col.list$intOLSubtypes)
+}
+
+## UMAP
+pc_dims <- 1:6
+{
+  auc.seurat %<>% RunUMAP(reduction = "auc.pca", dims = pc_dims, verbose = T, reduction.name = "auc.umap")
+  auc.seurat %>% DimPlot(reduction = "auc.umap", group.by = "intOLSubtypes", label = T, cols = col.list$intOLSubtypes, pt.size = 1.5)
+}
+
+# UMAP plot of the AUC clustering
+scenic.plots[["UMAP_AUC"]] <- auc.seurat %>% DimPlot(
+  reduction = "auc.umap", 
+  group.by = "intOLSubtypes", 
+  label = F, cols = col.list$intOLSubtypes, pt.size = 1.5) & NoAxes() & ggtitle(label = NULL)
+```
+
+Regulon Specificity Score (RSS). To identify cluster-specific regulons. The maximum RSS score of 1 means that the regulon is uniquely expressed in that particular celltype / cell state.
+```{r RSS}
+## adjust the auc matrix for cells contained in auc seurat
+{
+  aucmatrix <- AUCell::getAUC(scenic$regulonAUC)
+  aucmatrix <- aucmatrix[, Cells(auc.seurat)]
+}
+
+## Custom function to obtain the RSS value
+get_RSS_AUC <- function(regulonAUC, AUCseurat, clustering){ 
+  # regulonAUC = full cell-AUC values matrix, 
+  # AUCseurat = Seurat made of AUC matrix
+  # clustering = clustering of choice in AUCseurat
+  cell_clusters <- data.frame(AUCseurat[[clustering]]) ## supplementary clustering data.frame
+  cell_clusters[[clustering]] %<>% as.character # change the factor to character
+  if(all((regulonAUC %>% colnames) %in% (cell_clusters %>% rownames)) == TRUE){
+    rss <- calcRSS(AUC = regulonAUC, cellAnnotation = cell_clusters[[clustering]])
+    return(rss)
+  }else{
+    print("The cells in AUC matrix and AUC seurat do not match!")
+  }
+}
+
+rss_plot <- function(rss){
+  rssplot <- rss %>% plotRSS()
+  return(plotly::ggplotly(rssplot$plot))
+}
+
+## Dotplot of the most prominent regulons. 
+scenic.plots[["RSSplot_OL"]] <- get_RSS_AUC(
+  regulonAUC = aucmatrix, 
+  AUCseurat = auc.seurat, 
+  clustering = "intOLSubtypes") %>% rss_plot()
+
+## The most changed regulons (Z >= 3):
+## - MOL_DA1: Elf4 (Irf1, Irf9)
+## - MOL_DA2: Sox11, Rxrg, Cebpa, Tfap2a, Stat6
+## - MOL_IFN: Stat1, Stat2, (Irf1, Irf7)
+
+rss_plot_separate <- function(rss){
+  celltype <- colnames(rss)
+  rss_plot_list <- lapply(celltype, function(celltype){
+    plotRSS_oneSet(rss = rss, setName = celltype) # separate rank plots for each celltype
+    })
+  names(rss_plot_list) <- celltype
+  return(rss_plot_list)
+}
+
+# Separate regulon rank plots
+get_RSS_AUC(regulonAUC = aucmatrix,
+                     AUCseurat = auc.seurat, 
+                     clustering = "intOLSubtypes") %>% 
+  rss_plot_separate()
+```
+
+Now, the question is how to select the most influential TFs (and their regulons)? We can explore the importance of TFs in a separate cluster-wise view, comparing regulon specificity (RSS) with its expression (AUC value). The most extreme values are worth noting.
+```{r Cluster-wise RSS vs AUC values}
+## calculate RSS values for each regulon in each cluster
+scenic.results[["scenic_RSS_perCluster"]] <- get_RSS_AUC(
+  regulonAUC = aucmatrix,
+  AUCseurat = auc.seurat, 
+  clustering = "intOLSubtypes"
+  ) %>% as.data.frame()
+
+## Average AUC values per cluster
+scenic.results[["AverageRegulonActivity"]] %<>% as.data.frame()
+colnames(scenic.results[["AverageRegulonActivity"]]) <- auc.seurat$intOLSubtypes %>% levels
+
+## function to get the AUC-RSS plot
+auc_rss_scatter <- function(celltype, RSS.df, AUC.df){
+  
+  ## df of cluster-specific values
+  df <- data.frame(
+    "RSS" = RSS.df[[celltype]],
+    "AUC" = AUC.df[[celltype]], 
+    row.names = rownames(AUC.df), 
+    stringsAsFactors = F
+  )
+  
+  ## top values
+  top5auc <- df %>% slice_max(order_by = AUC, n = 5)
+  top5rss <- df %>% slice_max(order_by = RSS, n = 5)
+  
+  ## ggplot
+  plot <- ggplot(data = df, aes(x = AUC, y = RSS, color = sqrt(AUC^2 + RSS^2))) +
+    geom_point() +  # Add points
+    ggtitle(label = paste0("Scatter for ", celltype)) +
+    scale_color_viridis_c() +  # Use viridis color palette
+    ggrepel::geom_text_repel(data = top5auc, aes(label = rownames(top5auc)), box.padding = 0.5) +
+    ggrepel::geom_text_repel(data = top5rss, aes(label = rownames(top5rss)), box.padding = 0.5) +
+    labs(x = "Regulon Expression (AUC)", y = "Regulon Cluster Specificity (RSS)") + # Label axes
+    theme_light() + 
+    theme(legend.position = "none")
+  
+  return(plot)
+}
+
+
+# MOL IFN
+auc_rss_scatter(celltype = "MOL_IFN", 
+                RSS.df = scenic.results[["scenic_RSS_perCluster"]], 
+                AUC.df = scenic.results[["AverageRegulonActivity"]])
+### Stat1, Stat2 (Irf1, Irf7) appear as the most distinguishing 
+
+# MOL DA1
+auc_rss_scatter(celltype = "MOL_DA1", 
+                RSS.df = scenic.results[["scenic_RSS_perCluster"]], 
+                AUC.df = scenic.results[["AverageRegulonActivity"]])
+### Elf4 (Irf1, Irf9, Hmg20b)
+
+
+# MOL DA2
+auc_rss_scatter(celltype = "MOL_DA2", 
+                RSS.df = scenic.results[["scenic_RSS_perCluster"]], 
+                AUC.df = scenic.results[["AverageRegulonActivity"]])
+### Sox11, Rxrg, Tfap2a, Cebpa, Stat6
+
+## Selected TFs in UMAP and ViolinPlot
+molda.tfs <- c(
+  "Stat1", "Stat2", 
+  "Irf1", "Irf7", "Irf9",
+  "Elf4", 
+  "Sox11", "Rxrg", "Tfap2a", "Cebpa", "Stat6"
+  )
+## featureplot
+scenic.plots[["FeatPlots_AUC_MolDA_TFs"]] <- auc.seurat %>% FeaturePlot(
+  features = molda.tfs, 
+  pt.size = 1.5, 
+  reduction = "auc.umap", 
+  slot = "data",
+  shape.by = "intOLSubtypes", 
+  max.cutoff = 'q99',
+  combine = T, 
+  ncol = 4, 
+  raster = F) & NoAxes() & theme(legend.position = "none")
+
+## violin plot
+scenic.plots[["VlnPlot_AUC_MolDA_TFs"]] <- auc.seurat %>% VlnPlot(
+  features = molda.tfs, 
+  pt.size = 0.2, 
+  cols = col.list$intOLSubtypes, ncol = 4
+  ) & ylab(label = NULL) & xlab(label = NULL)
+```
+
+Having pinpointed the TFs of interest, let's explore their automated threshold settings.
+```{r Exploring the top 10 TFs}
+# For each regulon, an automated threshold has been set. Let's manually check the quality of 
+AUC_histogram <- function(seurat, feature){
+  if(exists("scenic", envir = .GlobalEnv) && "regulonAUCthresholds" %in% names(scenic)){
+    data <- seurat@assays$AUC@counts[feature,]
+    threshold <- scenic[["regulonAUCthresholds"]][feature]
+    data.df <- data.frame(
+      values = data,
+      colors = ifelse(data < threshold, "Below", "Above")
+    )
+    plot <- ggplot(data.df, aes(x = values, fill = colors)) +
+      geom_histogram(color = "transparent", bins = 100) +
+      scale_fill_manual(values = c("Below" = "#9ECAE1", "Above" = "#2171B5")) +
+      geom_vline(xintercept = threshold, color = "orange", linetype = "solid", size = 1) +
+      labs(title = paste0(feature, " motif"), x = "AUC histogram", y = "Frequency") + 
+      theme_light() +
+      guides(fill = "none")
+    return(plot)
+  }else{
+    return("Automatic AUC thresholds are not present!")
+  }
+}
+
+## observe the automatic thresholds
+scenic.plots[["Histogram_AUC_AutomaticThresholds"]] <- lapply(
+  molda.tfs, AUC_histogram, seurat = auc.seurat); names(scenic.plots[["Histogram_AUC_AutomaticThresholds"]]) <- molda.tfs
+
+```
+
+Seeing there are plausible changes in regulons, it is time to check whether TF's genes are also changed.
+```{r Highlighed regulons into gene modulescores}
+## selection of the most DA-changed regulons
+tfs <- c("Stat1", "Irf1", "Irf7","Irf9", "Elf4", "Sox11", "Cebpa")
+
+## for each regulon, create a module score
+scenic.results[["RegulonsOfInterest"]] <- scenic$regulons[paste0(tfs, "(+)")]
+scenic.results[["RegulonsOfInterest"]]
+
+seurat %<>% AddModuleScore(
+  features = scenic.results[["RegulonsOfInterest"]], assay = "RNA", name = paste0(c("Stat1", "Irf1", "Irf7","Irf9", "Elf4", "Sox11", "Cebpa"), "_Regulon"))
+seurat@meta.data %>% names %>% tail(7)
+
+## compare the module score values in-between 
+scenic.plots[["RegulonGenExp"]] <- lapply(seurat@meta.data %>% names %>% tail(7), function(x){
+  plot <- seurat %>% dittoSeq::dittoPlot(
+    var = x, group.by = "intOLSubtypes", split.by = "orig.ident",
+    plots = c("boxplot", "jitter"), color.panel = col.list$intOLSubtypes, 
+    boxplot.lineweight = 0.4, jitter.size = 1)
+  return(plot)
+}); names(scenic.plots[["RegulonGenExp"]]) <- seurat@meta.data %>% names %>% tail(7)
+  
+
+## are any of the regulon genes also markers of the populations?
+
+## Are the regulons activated as a whole or just in parts? Heatmap!
+seurat %>% DoHeatmap(
+  features = scenic.results$RegulonsOfInterest$`Sox11(+)`, 
+  cells = sampled.cells, group.by = "intOLSubtypes", 
+  assay = "RNA", slot = "scale.data", group.colors = col.list$intOLSubtypes,
+  draw.lines = F, angle = 0, hjust = 0.5, combine = T, size = 4) & 
+    theme(axis.text.y = element_text(size = 7)) & 
+    scale_fill_viridis_c(option = "inferno")
+
+### In particular, the heatmaps for Stat1, Irf9, Sox11 and Cebpa looked the most promising!
+
+scenic.results[["RegulonsOfInterest"]]$`Sox11(+)` %>% sort
+
+
+
+## what BPs are these regulons involved in? (Literature survey)
+
+```
+
+Is the regulon activation restricted to a particular area? Let's have a look by calculating regulon modulescores within the ST data.
+```{r Regulons in the spatial data}
+exists("spatial.seurat") ## If TRUE == ST data are loaded.
+
+## compute modulescores for selected tfs in spatial data
+spatial.seurat %<>% AddModuleScore(
+  features = scenic.results[["RegulonsOfInterest"]], assay = "SCT", name = paste0(c("Stat1", "Irf1", "Irf7","Irf9", "Elf4", "Sox11", "Cebpa"), "_Regulon"))
+spatial.seurat@meta.data %>% names %>% tail(7)
+
+spatial.seurat %>% SpatialPlot(
+  features = spatial.seurat@meta.data %>% names %>% tail(7), image.alpha = 0, crop = F, max.cutoff = 'q99', images = c("sham", "D1", "D3", "D7")) & NoLegend()
+
+
+
+
+
+
+
+
+```
+
+
+The regulon activity can be binarized to better delineate the differences between cell states.
+```{r Binarize Regulon Activity}
+## Exploring the automatic thresholds
+# Exploring the automatic thresholds
+AUC_histogram <- function(seurat, feature){
+  if(exists("scenic", envir = .GlobalEnv) && "regulonAUCthresholds" %in% names(scenic)){
+    data <- seurat@assays$AUC@counts[feature,]
+    threshold <- scenic[["regulonAUCthresholds"]][feature]
+    data.df <- data.frame(
+      values = data,
+      colors = ifelse(data < threshold, "Below", "Above")
+    )
+    plot <- ggplot(data.df, aes(x = values, fill = colors)) +
+      geom_histogram(color = "transparent", bins = 100) +
+      scale_fill_manual(values = c("Below" = "#9ECAE1", "Above" = "#2171B5")) +
+      geom_vline(xintercept = threshold, color = "orange", linetype = "solid", size = 1) +
+      labs(title = paste0(feature, " motif"), x = "AUC histogram", y = "Frequency") + 
+      theme_light() +
+      guides(fill = "none")
+    return(plot)
+  }else{
+    return("Automatic AUC thresholds are not present!")
+  }
+}
+AUC_histogram(seurat = auc.seurat, feature = "IRF1")
+
+```
+
+
+
+
+
+Load the seurat
+```{r seurat load}
+if(!dir.exists("results/SpatialFigures/Figure4/oligodendrocytes")){dir.create("results/SpatialFigures/Figure4/oligodendrocytes"); ws <- "results/SpatialFigures/Figure4/oligodendrocytes"}else{ws <- "results/SpatialFigures/Figure4/oligodendrocytes"}
+
+oligo.seurat <- readRDS("data/seurat_OLIGO_names_soupX.rds"); DefaultAssay(oligo.seurat) <- "SCT"
+oligo.seurat$cell_type_2 %>% levels()
+oligo.seurat %<>% subset(idents = "dead", invert = T); oligo.seurat$cell_type_2 %<>% droplevels() ## remove dead cells and their factor
+oligo.seurat$Condition %<>% factor(levels = c("sham", "D1", "D3", "D7"))
+
+oligo.seurat[["cell_type_2"]] <- case_when(
+  oligo.seurat$cell_type_2 == "OPC" ~ "OPC",
+  oligo.seurat$cell_type_2 == "COP+NFOL" ~ "NFOL",
+  oligo.seurat$cell_type_2 == "MFOL+MOL" ~ "MOL",
+  oligo.seurat$cell_type_2 == "MOL" ~ "MOL",
+  oligo.seurat$cell_type_2 == "FastResponseOL" ~ "MOL",
+  oligo.seurat$cell_type_2 == "TAO" ~ "Reactive",
+) %>% factor(levels = c("OPC", "NFOL", "MOL", "Reactive")); oligo.seurat %<>% SetIdent(value = "cell_type_2")
+
+oligo.seurat[[]] %>% names
+
+col.list[["ol_cols"]] <- c(
+  "OPC" = "#BFD3E6",
+  "NFOL" = "#9EBCDA",
+  "MOL" = "#8C96C6",
+  "Reactive" = "#810F7C"
+)
+```
+
+UMAP
+```{r Figure sn UMAP}
+(oligo.seurat %>% 
+  UMAPPlot(group.by = "cell_type_2", pt.size = 1, label = F, label.box = T, cols = col.list[["ol_cols"]]) + 
+  NoLegend() + 
+  theme(plot.background = element_blank(), panel.background = element_blank())) %>% ggsave(filename = file.path(ws, "UMAPPlot_sn_ol.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 10)
+```
+
+Proportions per condition
+```{r Proportions}
+## proportions
+library(dittoSeq)
+oligo.seurat$Condition %>% table
+oligo.seurat$cell_type_2 %>% table
+
+oligo.seurat %>% dittoBarPlot(var = "Condition", group.by = "cell_type_2", scale = "count")
+oligo.seurat %>% dittoBarPlot(var = "Condition", group.by = "cell_type_2", scale = "percent")
+
+## data frames
+ids <- oligo.seurat@meta.data$Condition %>% levels; categories <- levels(oligo.seurat@meta.data$cell_type_2); counts <- matrix(nrow=length(ids), ncol=length(categories)); rownames(counts) <- ids; colnames(counts) <- categories
+for (i in seq_along(ids)) {
+  for (j in seq_along(categories)) {
+    count <- oligo.seurat@meta.data %>%
+      filter(Condition == ids[i], cell_type_2 == categories[j]) %>%
+      nrow()
+
+    counts[i, j] <- count
+  }
+}; rm(i,j)
+
+counts_mm_0 <- reshape2::melt(counts, id = "rownames") ## total count proportions
+
+ggplot(data = counts_mm_0, aes(x = Var2, y = value, fill = Var1)) + 
+  geom_col(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylab('Proportion of cells')
+counts <- counts/rowSums(counts)
+counts_mm_1 <- reshape2::melt(counts, id = "rownames") ## percent count proportions
+
+
+p <-  ggplot(data = counts_mm_1, aes(x = Var2, y = value, fill = Var1)) + ## percent count proportions
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 105, hjust = 1, vjust = 0, family = "OpenSans", size = 35, color = "black"), 
+          axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5, family = "OpenSans", size = 18, color = "black"),
+          axis.title = element_text(family = "OpenSans", size = 25),
+          plot.background = element_blank(),
+          panel.background = element_blank()) +
+    ylab('Proportion of nuclei') +
+    xlab("") + ggtitle("") + NoLegend() + ylim(0,1) +
+    scale_fill_manual(values = c("#525475", "#F1D7AB", "#E6B188", "#D18080")); p
+p %>% ggsave(filename = file.path(ws, "BarPlot_PercentProportions_sn_OL_bySample.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 6, height = 8, bg = 'transparent')
+
+```
+
+Markers, dotplot
+```{r Markers, Dotplot}
+## Markers
+ol.seurat.markers <- FindAllMarkers(object = oligo.seurat, assay = "SCT", logfc.threshold = 0.58, verbose = T, only.pos = T) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  split(f = .[["cluster"]])
+
+##adding a column on marker's median expression for the population
+ol.markers2 <- lapply(names(ol.seurat.markers), function(pop){
+  temppos <- oligo.seurat$cell_type_2 == pop
+  temp <- oligo.seurat@assays$RNA@counts[, temppos] %>% apply(MARGIN = 1, FUN = median)
+  tempgenes <- ol.seurat.markers[[pop]][["gene"]]
+  temp %<>% .[names(temp) %in% tempgenes] %>% .[match(tempgenes, table = names(.))]
+  ol.seurat.markers[[pop]] %<>% dplyr::mutate("MedianPopulationUMI" = temp)
+  return(ol.seurat.markers[[pop]])
+}); names(ol.markers2) <- names(ol.seurat.markers)
+
+ol.markers2 %>% write.xlsx(file = file.path(ws, "Markers_sn_OL.xlsx"), overwrite = T)
+
+## markers of reactive vs MOL
+pops <- c("Reactive")
+reac.ol.list <- lapply(pops, function(OL){
+  temp <- FindMarkers(oligo.seurat, ident.1 = OL, ident.2 = "MOL", assay = "SCT", logfc.threshold = 0.58, only.pos = T, verbose = T) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  rownames_to_column(var = "gene")
+  return(temp)
+}); names(reac.ol.list) <- pops
+
+
+## dotplot
+{
+features_test <- c("Pdgfra", "Sox6", "Cspg4",  #OPC
+              "Rras2", "Prom1", "Tcf7l2", "Nckap5", #NFOL
+              "Plp1", "Mog", "Mast4",  "Grm3", "Ptgds", #MOL
+              "Pkp4", "Neat1", "Rhoj", "Il33", "C4b", "Gab2", "Serpina3n"  #Reactive
+              )
+
+oligo.seurat %>% FeaturePlot(features = features_test, max.cutoff = 'q99')
+oligo.seurat %>% VlnPlot(features = features_test)
+
+p <- DotPlot(oligo.seurat, assay = "SCT", features = features_test, group.by = "cell_type_2", cols = c("#FFF7FB", "#8C96C6"), scale = F) + 
+  theme(text = element_text(family = "OpenSans", size = 20), 
+        axis.text.y = element_text(size = 30, hjust = 1), 
+        axis.text.x = element_text(angle = 55, vjust = 1, hjust = 1, size = 25), legend.position = "right",
+        axis.ticks = element_blank(), 
+        axis.title = element_blank());p
+p %>% ggsave(filename = paste0(ws, "/DotPlot_sn_OL.tiff"), device = 'tiff', dpi = 300, width = 5, height = 3)  
+}
+
+```
+
+Gene ontology analysis
+```{r GO analysis}
+ol.markers <- read_all_sheets(file.path(ws, "Markers_sn_OL.xlsx"))
+
+reac.degs <- oligo.seurat %>% FindMarkers(ident.1 = "Reactive", ident.2 = "MOL", logfc.threshold = 0.58, assay = "SCT", verbose = T, only.pos = T)
+reac.markers <- list(
+  "snReactive" = reac.degs %>% filter(avg_log2FC > 0.58) %>% rownames() %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)]
+)
+
+
+## GO analysis
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE)
+organism <- org.Mm.eg.db; background <- rownames(oligo.seurat[["SCT"]])
+ORA.list <- lapply(reac.markers, function(x) enrichGO(gene          = x, # list of genes 
+                                                      universe      = background, # 'potential DEGs'
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = organism,
+                                                      ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01, #
+                                                      qvalueCutoff  = 0.2,
+                                                      readable      = F,
+                                                      minGSSize     = 3) #%>% clusterProfiler::simplify()
+                   )
+ORA.list %>% write.xlsx(file = file.path(ws, "ORAlist_sn_ReacOligo.xlsx"), overwrite = T)
+
+## selecting terms for the barplot
+terms <- c(
+           ## BP
+           "", # 
+
+           ## CC
+           "", # 
+
+           ## MF
+           "" # 
+           )
+```
+
+Sn signature in spatial
+```{r sn signature in spatial}
+reac.degs <- oligo.seurat %>% FindMarkers(ident.1 = "Reactive", ident.2 = "MOL", logfc.threshold = 0.58, assay = "SCT", verbose = T, only.pos = T)
+reac.markers <- list(
+  "snReactive" = reac.degs %>% filter(avg_log2FC > 0.58) %>% rownames() %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)] %>% head(15)
+)
+
+spatial.seurat %<>% AddModuleScore(features = reac.markers, name = names(reac.markers))
+spatial.seurat[[]] %>% names
+
+features <- c("snReactive1")
+## plot the combined spatial+vln plot
+lapply(features, function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2)
+  print(feature.name)
+  minmax <- c(min(spatial.seurat[[feature]]), max(spatial.seurat[[feature]]))
+  (spatial.seurat %>% 
+      SpatialPlot(features = feature, crop = F, pt.size = 1.35, alpha = c(0.8, 1), images = c('sham', 'D1', 'D3', 'D7'), image.alpha = 0, stroke = 0.01) & 
+      theme(text = element_text(family = plot.font, size = 9), legend.key.size = unit(0.2, 'cm')) & NoLegend() 
+    & ggplot2::scale_fill_gradientn(colours = c("#4D4D4D", "#FFFFFF", "#211E61"), limits = minmax)
+    ) %>% 
+  ggsave(filename = paste0(ws, "/SpatialPlot_scsnOL_", feature.name, ".tiff"), device = 'tiff', dpi = 300, width = 18, height = 6, units = 'cm')
+})
+```
+
+Published OL datasets in the single nucleus and spatial data.
+```{r metanalysis}
+##snOL markers
+reac.degs <- oligo.seurat %>% FindMarkers(ident.1 = "Reactive", ident.2 = "MOL", logfc.threshold = 0.58, assay = "SCT", verbose = T, only.pos = T) %>% arrange(desc(avg_log2FC))
+reac.markers <- list(
+  "snReactive" = reac.degs %>% filter(avg_log2FC > 0.58) %>% rownames() %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)]
+)
+reac.degs[["avg_log2FC"]] %>% min ## only positive markers
+rol.markers <- reac.markers[["snReactive"]]
+
+## metadata
+metadata.list <- read_all_sheets(file = "data/SupplementaryTable4_Metanalysis_GlialReactivityMarkers.xlsx") %>% 
+  .[names(.) %>% grep(pattern = "MOL|_OL_|DOL", ignore.case = T)] %>%  ## keep the OL-related populations
+  lapply(., function(df) df %>% pull()) ## change the dataframes into vectors
+
+oligo.seurat %<>% AddModuleScore(features = metadata.list, name = names(metadata.list))
+oligo.seurat[[]] %>% names
+
+features <- oligo.seurat[[]] %>% names %>% tail(length(metadata.list))
+
+
+## overlap testing
+meta.intersects <- lapply(names(metadata.list), function(meta){
+  paste0("Length of metadataset ", meta, " is ",  metadata.list[[meta]] %>% length, " genes.") %>% print
+  int <- intersect(rol.markers, metadata.list[[meta]]) %>% length
+  paste0("Intersection is ", int) %>% print
+  return(int)
+  }); names(meta.intersects) <- names(metadata.list)
+
+## signif testing gene overlaps
+meta.signif <- lapply(names(meta.intersects), function(meta){
+  background.size <- ((oligo.seurat@assays$RNA %>% rowSums()) > 10) %>% sum ##background gene set size with UMI counts > 10
+  print(background.size)
+  intersection <- meta.intersects[[meta]]
+  meta.set.size <- metadata.list[[meta]] %>% length
+  
+  phyper(
+  q = intersection - 1,  ## number of red marbles in the draw -1 (see below)
+  m = meta.set.size, ## number of red marbles in urn
+  n = background.size - meta.set.size, ## number of green marbles in urn
+  k = rol.markers %>% length, ## number of drawn marbles
+  lower.tail = FALSE ## compute P(X > overlap), hence the '-1' in the q argument
+) -> test
+  return(test)
+}); names(meta.signif) <- names(meta.intersects); meta.signif %<>% p.adjust(method = "fdr")
+meta.signif; meta.signif < 0.01  ## see results; all below
+
+
+## Published datasets in spatial
+## add metadata
+spatial.seurat %<>% AddModuleScore(features = metadata.list, name = metadata.list %>% names)
+features <- names(metadata.list) %>% paste0(., seq(1:length(.))) ## feature names as they are added
+identical(features, spatial.seurat[[]] %>% names %>% tail(length(features))) ## TRUE = vector names are identical
+
+## correlation Reactive and DOL
+spatial.seurat %<>% AddModuleScore(features = list(rol.markers %>% head(15)), name = "snOL_Reac")
+spatial.seurat[[]] %>% names
+
+df <- data.frame(
+  "snOL_Reac" = spatial.seurat$snOL_Reac1,
+  "Kenigsbuch_DOL" = spatial.seurat$Kenigsbuch2022_AD_DOL6
+)
+
+cor.test(x = df$snOL_Reac, y = df$Kenigsbuch_DOL, method = "spearman")
+plot(x = df$snOL_Reac, y = df$Kenigsbuch_DOL)
+
+(ggplot(data = df, aes(x = snOL_Reac, y = Kenigsbuch_DOL)) + 
+  geom_point(aes(color = snOL_Reac), size = 0.5) + scale_color_gradientn(colors = c("#8C96C6","#810F7C")) + xlab("Reactive Oligodendrocytes signature") + ylab("DOL signature") +
+  geom_smooth(method = 'lm', se = F, color = "black") + theme_light()+ theme(axis.title = element_text(size = 20, family = "OpenSans")) + NoLegend()) %>% ggsave(filename = file.path(ws, "ScatterPlot_snOLReac_KenigsbuchDOL.tiff"), device = 'tiff', dpi = 300, height = 6, width = 7, units = "cm")
+
+```
+
+
+
+
+
+
+
+```{r scsn seurat load}
+if(!dir.exists("results/SpatialFigures/Figure4/oligodendrocytes")){dir.create("results/SpatialFigures/Figure4/oligodendrocytes"); ws <- "results/SpatialFigures/Figure4/oligodendrocytes"}else{ws <- "results/SpatialFigures/Figure4/oligodendrocytes"}
+
+
+oligoint.seurat <- readRDS("data/seurat_OLIGO_integrated_UMAP_named.rds")
+oligoint.seurat %<>% SetIdent(value = "scsnOLAnno")
+oligoint.seurat@active.ident %>% levels
+
+
+```
+
+Clustering of the integrated dataset
+```{r clustering}
+DefaultAssay(oligoint.seurat) <- "integrated"
+
+oligoint.seurat %>% UMAPPlot(label = T)
+oligoint.seurat %<>% FindClusters(resolution = 1.6, verbose = T, algorithm = 4) # min cluster size of 130 cells
+oligoint.seurat %>% UMAPPlot(label = T)
+```
+
+Annotation of the annotated clusters
+```{r cluster annotation}
+DefaultAssay(oligoint.seurat) <- "SCT"
+oligoint.seurat %<>% SetIdent(value = "integrated_snn_res.1.6")
+
+oligoint.seurat[["scsnOLAnno"]] <- oligoint.seurat[["integrated_snn_res.1.6"]]
+oligoint.seurat[["scsnOLAnno"]] <- case_when(
+  oligoint.seurat$scsnOLAnno == "14" ~ "NFOL",
+  
+  oligoint.seurat$scsnOLAnno == "1" ~ "MOL2",
+  oligoint.seurat$scsnOLAnno == "7" ~ "MOL2",
+  oligoint.seurat$scsnOLAnno == "12" ~ "MOL2",
+  
+  oligoint.seurat$scsnOLAnno == "2" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "3" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "4" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "5" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "6" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "8" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "9" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "15" ~ "MOL5/6",
+  oligoint.seurat$scsnOLAnno == "16" ~ "MOL5/6",
+  
+  oligoint.seurat$scsnOLAnno == "10" ~ "MOL_IFN",
+  oligoint.seurat$scsnOLAnno == "11" ~ "MOL_DA1",
+  oligoint.seurat$scsnOLAnno == "13" ~ "MOL_DA2",
+  ) %>% factor(levels = c("NFOL", "MOL2", "MOL5/6", "MOL_IFN", "MOL_DA1", "MOL_DA2")); oligoint.seurat %<>% SetIdent(value = "scsnOLAnno")
+
+oligoint.seurat$Condition %<>% factor(levels = c("sham", "D1", "D3", "D7"))
+
+oligoint.seurat %>% UMAPPlot(cols = col.list[["ol_cols"]])
+
+#saveRDS(oligoint.seurat, file = "data/seurat_OLIGO_integrated_UMAP_named.Rds")
+```
+
+UMAP clusters. Mito and ribo content
+```{r scsn UMAP}
+oligoint.seurat <- readRDS(file = "data/seurat_OLIGO_integrated_UMAP_named.Rds")
+
+(oligoint.seurat %>% 
+  UMAPPlot(group.by = "scsnOLAnno", pt.size = 1, label = F, label.box = T, cols = col.list[["ol_cols"]]) + 
+  NoLegend() + 
+  theme(plot.background = element_blank(), panel.background = element_blank())) %>% ggsave(filename = file.path(ws, "UMAPPlot_scsn_ol.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 12)
+
+## sc vs sn
+(oligoint.seurat %>% 
+  UMAPPlot(group.by = "orig.ident", pt.size = 1, label = F, label.box = T, cols = c("#525475", "#E6B188")) + 
+  NoLegend() + 
+  theme(plot.background = element_blank(), panel.background = element_blank())) %>% ggsave(filename = file.path(ws, "UMAPPlot_scsn_ol_origident.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 12)
+
+## condition
+(oligoint.seurat %>% 
+  UMAPPlot(group.by = "Condition", pt.size = 1, label = F, label.box = T, cols = c("sham" = "#525475", "D1" = "#F1D7AB", "D3" = "#E6B188", "D7" = "#D18080")) + 
+  NoLegend() + 
+  theme(plot.background = element_blank(), panel.background = element_blank())) %>% ggsave(filename = file.path(ws, "UMAPPlot_scsn_ol_conditions.tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 10, height = 12)
+
+
+DefaultAssay(oligoint.seurat) <- "SCT"
+## percent ribo
+(oligoint.seurat %>% FeaturePlot(features = "percent.rib", label = F, pt.size = 0.25, cols = brewer.pal(n = 9, name = "Blues")[3:9]) & 
+    theme(text = element_text(family = "OpenSans"))) %>% 
+    ggsave(filename = paste0(ws, "/FeaturePlot_scsnOL_percentRib.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 8, height = 8) ## The legend corresponds to the color order, not absolute values. 
+oligoint.seurat$percent.rib %>% summary
+
+
+## percent mt
+(oligoint.seurat %>% FeaturePlot(features = "percent.mt", label = F, pt.size = 0.25, cols = brewer.pal(n = 9, name = "Blues")[3:9]) & 
+    theme(text = element_text(family = "OpenSans"))) %>% 
+    ggsave(filename = paste0(ws, "/FeaturePlot_scsnOL_percentMt.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 8, height = 8) ## The legend corresponds to the color order, not absolute values. 
+oligoint.seurat$percent.mt %>% summary
+```
+
+Mito and ribo content continued.
+```{r ribo mito}
+oligoint.seurat[[]] %>% names ## percent.mt and percent.rib are calculated
+
+oligoint.seurat %>% FeaturePlot(features = "percent.mt", pt.size = 0.25, max.cutoff = 'q99', cols = brewer.pal(n = 9, name = "Blues")[3:9]) %>% 
+  ggsave(filename = file.path(ws, "FeaturePlot_scsn_oligo_percentMT.tiff"), device = 'tiff', dpi = 300, width = 10, height = 10, units = 'cm')
+
+(oligoint.seurat %>% 
+    VlnPlot(features = "percent.mt", group.by = "scsnOLAnno", pt.size = 0, cols = col.list[["ol_cols"]]) + 
+    coord_flip() + NoLegend() + xlab("") + ylab("") + 
+    theme(axis.text = element_text(family = "OpenSans", size = 20))) %>% 
+  ggsave(filename = file.path(ws, "VlnPlot_scsn_oligo_percentMT.tiff"), device = 'tiff', dpi = 300, width = 7, height = 10, units = 'cm')
+
+
+oligoint.seurat %>% FeaturePlot(features = "percent.rib", pt.size = 0.25, max.cutoff = 'q99', cols = brewer.pal(n = 9, name = "Blues")[3:9]) %>% 
+  ggsave(filename = file.path(ws, "FeaturePlot_scsn_oligo_percentRIB.tiff"), device = 'tiff', dpi = 300, width = 10, height = 10, units = 'cm')
+
+(oligoint.seurat %>% 
+    VlnPlot(features = "percent.rib", group.by = "scsnOLAnno", pt.size = 0, cols = col.list[["ol_cols"]]) + 
+    coord_flip() + NoLegend() + xlab("") + ylab("") + 
+    theme(axis.text = element_text(family = "OpenSans", size = 20))) %>% 
+  ggsave(filename = file.path(ws, "VlnPlot_scsn_oligo_percentRIB.tiff"), device = 'tiff', dpi = 300, width = 7, height = 10, units = 'cm')
+
+```
+
+Cluster proportions - conditions
+```{r scsn proportions}
+## Cluster proportions
+ids <- levels(oligoint.seurat@meta.data$Condition); categories <- levels(oligoint.seurat@meta.data$scsnOLAnno); counts <- matrix(nrow=length(ids), ncol=length(categories)); rownames(counts) <- ids; colnames(counts) <- categories
+for (i in seq_along(ids)) {
+  for (j in seq_along(categories)) {
+    count <- oligoint.seurat@meta.data %>%
+      filter(Condition == ids[i], scsnOLAnno == categories[j]) %>%
+      nrow()
+
+    counts[i, j] <- count
+  }
+}; rm(i,j)
+
+counts_mm_0 <- reshape2::melt(counts, id = "rownames") ## total count proportions
+ggplot(data = counts_mm_0, aes(x = Var2, y = value, fill = Var1)) + 
+  geom_col(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylab('Proportion of cells')
+counts <- counts/rowSums(counts)
+counts_mm_1 <- reshape2::melt(counts, id = "rownames")
+
+
+p <-  ggplot(data = counts_mm_1, aes(x = Var2, y = value, fill = Var1)) + ## percent count proportions
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 105, hjust = 1, vjust = 0), axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) +
+    ylab('Proportion of cells') +
+    xlab("") + ggtitle("") + NoLegend() +
+    theme(axis.text = element_text(family = "OpenSans", size = 35, color = "black"),
+        axis.title = element_text(family = "OpenSans", size = 35),
+        plot.background = element_rect(fill = 'transparent', color = NA),
+        panel.background = element_rect(fill = 'transparent', color = NA)) +
+    scale_fill_manual(values = c("#525475", "#F1D7AB", "#E6B188", "#D18080")); p; 
+p %>% ggsave(filename = file.path(ws, "BarPlot_PercentProportions_OurSCSNint_Oligo_bySample.tiff"), device = 'tiff', units = "cm", dpi = 300, width = 12, height = 7, bg = 'transparent')
+
+## stacked barplots
+library(dittoSeq)
+dittoBarPlot(object = oligoint.seurat, 
+                       group.by = "cell_type_3", 
+                       scale = "percent",
+                       var = 'orig.ident', color.panel = brewer.pal(n = 8, name = "Dark2")[c(3:4)], x.labels.rotate = T)
+
+
+oligoint.seurat %>% dittoBarPlot(var = "cell_type_2", group.by = "cell_type_3", scale = "percent")
+```
+
+Markers, dotplot
+```{r scsn markers, dotplot}
+oligoint.seurat@active.ident %>% levels
+oligoint.seurat %<>% SetIdent(value = "scsnOLAnno")
+
+## Markers
+oligoint.seurat %<>% PrepSCTFindMarkers()
+oligoint.markers.all <- FindAllMarkers(oligoint.seurat, assay = 'SCT', logfc.threshold = 0.4, verbose = T, only.pos = T) %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  filter(p_val_adj < 0.01) %>% 
+  split(f = .[["cluster"]])
+write.xlsx(oligoint.markers.all, file = file.path(ws, "Markers_intSCSN_OLs.xlsx"), overwrite = T) ## save the file
+
+
+
+## Dotplot
+oligoint.seurat %>% FeaturePlot(features = "Rras2", pt.size = 1.5, label = T)
+oligoint.seurat$scsnOLAnno %>% levels
+feature <- 'Tnfrsf12a'; list('A' = oligoint.seurat %>% VlnPlot(features = feature),
+                        'B' = oligoint.seurat %>% FeaturePlot(features = feature, pt.size = 1.2)) %>% gridExtra::grid.arrange(grobs = ., ncol = 2)
+
+features_test <- c('Plp1', 'Mag', 'Mog', 'Olig1', 'Apod', ## OL lineage
+                   'Nckap5','Tcf7l2', 'Prom1',   # NFOL
+                   'Sepp1', 'S100b', 'Hopx',  # MOL2
+                   'Opalin', 'Ptgds',  # MOL5/6
+                   'Cd9', 'C4b','Ifi27', 'H2-D1', 'B2m',  # MOL IFN
+                   'Trf', 'Serpina3n', 'Klk6', # MOL DA1
+                   'Cd63', 'Eif1', 'Cct5', 'Ctsd', 'Ddit3', 'Cdkn1a',  'Tnfrsf12a'  # MOL DA2
+                   ); p <- DotPlot(oligoint.seurat, assay = "SCT", features = features_test, group.by = "scsnOLAnno", cols = c("#FFF7FB", "#4D3D70")) + xlab("") + ylab("") +
+  theme(text = element_text(family = "OpenSans", size = 22),
+        axis.text = element_text(size = 25),
+        axis.text.x = element_text(angle = 45, hjust = 1), 
+        axis.ticks = element_blank());p
+p %>% ggsave(filename = paste0(ws, "/DotPlot_intSNSC_Oligo.tiff"), plot = ., device = 'tiff', dpi = 300, width = 20, height = 9, units = "cm")
+
+## Individual gene featureplot
+features <- c('Serpina3n', 'C4b', 'Klk6', 'Gadd45b', 'Tnfrsf1a', 'Eif4a1', 'Cebpd', 'Ifi27')
+lapply(features, function(feature){
+  (oligoint.seurat %>% FeaturePlot(features = feature, label = F, pt.size = 0.5, max.cutoff = 'q99') & 
+    theme(text = element_text(family = "OpenSans")) & 
+    viridis::scale_color_viridis(option = "rocket", direction = -1, alpha = 1, end = 0.99)) %>% 
+    ggsave(filename = paste0(ws, "/FeaturePlot_scsnOL_gene_", feature, ".tiff"), device = 'tiff', units = "cm", dpi = 300, width = 8, height = 8)
+})
+```
+
+Gene ontology analysis
+```{r GO analysis}
+library(clusterProfiler); library("org.Mm.eg.db", character.only = TRUE)
+organism <- org.Mm.eg.db; background <- rownames(oligoint.seurat[["SCT"]])
+
+oligoint.markers.all <- read_all_sheets(file = file.path(ws, "Markers_intSCSN_OLs.xlsx")) ## read the file
+
+## GO analysis
+oligoint.seurat@active.ident %>% table
+pops <- c("MOL_IFN", "MOL_DA1", "MOL_DA2")
+diff.reac.list <- lapply(pops, function(pops){oligoint.markers.all[[pops]][["gene"]] %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)] ## removing ribosomal and mito genes 
+  }); names(diff.reac.list) <- pops
+
+
+ORA.list <- lapply(diff.reac.list, function(x) enrichGO(gene          = x , # list of genes 
+                                                      universe      = background, # 'potential DEGs'
+                                                      keyType       = "SYMBOL", # or ENSEMBL
+                                                      OrgDb         = organism,
+                                                      ont           = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+                                                      pAdjustMethod = "fdr",
+                                                      pvalueCutoff  = 0.01, #
+                                                      qvalueCutoff  = 0.2,
+                                                      readable      = F,
+                                                      minGSSize     = 3) %>% clusterProfiler::simplify()
+                   )
+
+ORA.list %>% write.xlsx(file = file.path(ws, "ORAlist_scsn_MOL_DA.xlsx"), overwrite = T)
+
+
+## selected representative GO terms
+ORA.list <- read_all_sheets(file.path(ws, "ORAlist_scsn_MOL_DA.xlsx"))
+terms.list <- list(
+  "MOL_IFN" = c(
+    "GO:0006897", # endocytosis (BP)
+    "GO:0006959", # humoral response (BP)
+    "GO:0010039", # response to iron ion (BP)
+    "GO:0042612" # MHC class I (CC)
+  ),
+  "MOL_DA1" = c(
+    "GO:0043209", # myelin sheath (CC)
+    "GO:0003779", # actin binding (MF)
+    "GO:0005200" # structural component of cytoskeleton (MF)
+  ),
+  "MOL_DA2" = c(
+    "GO:0006413", # translation initiation (BP)
+    "GO:0006986", # response to unfolded protein (BP)
+    "GO:0097193", # intrinsic apoptotic pathway (BP)
+    "GO:0006091", # generation of precursor metabolites and energy (BP)
+    "GO:1901214", # regulation of neuron death (BP)
+    "GO:0052547" # regulation of peptidase pathway (BP)
+  )
+)
+
+GO.plot <- lapply(names(terms.list) %>% rev, function(population){
+  subset.ORA <- ORA.list[[population]] %>% filter(ID %in% terms.list[[population]])
+  ORA.data <- data.frame(
+    'Description' = subset.ORA[["Description"]] %>% stringr::str_to_title() %>% stringr::str_replace_all(c("Mhc" = "MHC", "Atp" = "ATP")),
+    'Pval' = subset.ORA[["p.adjust"]] %>% log10 %>% '*'(-1),
+    'Population' = rep(paste0(population), nrow(subset.ORA))) %>% arrange(Pval)
+  }
+); GO.plot %<>% dplyr::bind_rows(); GO.plot$Description %<>% factor(levels = unique(.))
+
+
+## barplot
+(ggplot(data = GO.plot, aes(x = Description, y = Pval, fill = Population)) + 
+    geom_bar(stat = "identity", width = 0.6, size = 0.2, colour = "black", alpha = 0.75) +
+    scale_fill_manual(values = col.list[["ol_cols"]]) +
+    ylim(0, max(GO.plot$Pval) + 1) + 
+    geom_hline(yintercept = 1.3, size = 0.2) +
+    coord_flip() +
+    theme(text = element_text(family = "OpenSans", size = 40), 
+          axis.text.x = element_text(vjust = 1, hjust = 1,size = 40),
+          axis.text.y = element_text(vjust = 0.5, hjust = 1, size = 40, color = 'black'),
+          axis.ticks = element_blank(),
+          panel.background = element_blank(), #transparent panel bg
+          plot.background = element_blank(), #transparent plot bg 
+          panel.grid.major.x = element_blank(), 
+          panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2)
+          ) + NoLegend() +
+          xlab("") + ylab(expression(paste("-log(Padj)")))) %>% ggsave(filename = paste0(ws, "/Barplot_scsn_OL_GO.tiff"), device = "tiff", dpi = 300, width = 8.5, height = 6)
+```
+
+ScSn signatures in the spatial data.
+```{r scsn profiles in spatial}
+oligoint.markers.all <- read_all_sheets(file = file.path(ws, "Markers_intSCSN_OLs.xlsx")) ## read the file
+pops <- c("MOL_IFN", "MOL_DA1", "MOL_DA2")
+diff.reac.list <- lapply(pops, function(pops){oligoint.markers.all[[pops]][["gene"]] %>% .[grep("^Rp|^mt", x = ., ignore.case = F, invert = T)] ## removing ribosomal and mito genes 
+  }); names(diff.reac.list) <- pops
+
+reac.list <- list(
+  "MOL_IFN" = diff.reac.list[["MOL_IFN"]] %>% head(15),
+  "MOL_DA1" = diff.reac.list[["MOL_DA1"]] %>% head(15),
+  "MOL_DA2" = diff.reac.list[["MOL_DA2"]] %>% head(15)
+)
+spatial.seurat %<>% AddModuleScore(features = reac.list, name = names(reac.list))
+spatial.seurat[[]] %>% names ## modules scores were added (the last three)
+features <- spatial.seurat[[]] %>% names %>% tail(3)
+
+## Spatial plots
+lapply(features, function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2)
+  print(feature.name)
+  minmax <- c(min(spatial.seurat[[feature]]), max(spatial.seurat[[feature]]))
+  (spatial.seurat %>% 
+      SpatialPlot(features = feature, crop = F, pt.size = 1.35, alpha = c(0.8, 1), images = c('sham', 'D1', 'D3', 'D7'), image.alpha = 0, stroke = 0.01) & 
+      theme(text = element_text(family = plot.font, size = 9), legend.key.size = unit(0.2, 'cm')) & NoLegend() 
+    & ggplot2::scale_fill_gradientn(colours = c("#4D4D4D", "#FFFFFF", "#211E61"), limits = minmax)
+    ) %>% 
+  ggsave(filename = paste0(ws, "/SpatialPlot_scsnOL_", feature.name, ".tiff"), device = 'tiff', dpi = 300, width = 18, height = 6, units = 'cm')
+})
+```
+
+```{r Metanalysis}
+oligoint.seurat %<>% SetIdent(value = "scsnOLAnno")
+oligoint.seurat %>% UMAPPlot(label = T, pt.size = 2, label.box = T)
+oligoint.seurat %>% UMAPPlot(label = T, group.by = 'cell_type_3')
+
+## markers
+oligoint.markers.all <- read_all_sheets(file = file.path(ws, "Markers_intSCSN_OLs.xlsx")) ## read in the markers
+oligoint.seurat@active.ident %>% table
+
+oligoint.seurat %>% UMAPPlot(label = T, split.by = 'orig.ident', pt.size = 2)
+oligoint.seurat %>% UMAPPlot(label = T, split.by = 'orig.ident', group.by = 'Condition', pt.size = 2)
+oligoint.seurat %>% UMAPPlot(label = T, split.by = 'Condition', pt.size = 2)
+
+
+### MOL5/6
+features <- c('Ptgds', 'Il33')
+FeaturePlot(oligoint.seurat, features = features, label = T, pt.size = 2, min.cutoff = 'q5')
+oligoint.seurat %>% VlnPlot(features = features)
+
+### MOL2
+features <- c('Klk6', 'Hopx')
+FeaturePlot(oligoint.seurat, features = features, label = T, pt.size = 2, min.cutoff = 'q5')
+
+### MOL_DA1
+features <- c('C4b', 'Serpina3n', 'Tagln2')
+FeaturePlot(oligoint.seurat, features = features, label = T, pt.size = 2)
+oligoint.seurat %>% VlnPlot(features = features)
+
+### MOL_DA2
+features <- c('Cdkn1a', 'Tnfrsf12a', 'Bax')
+FeaturePlot(oligoint.seurat, features = features, label = T, pt.size = 2)
+oligoint.seurat %>% VlnPlot(features = features)
+
+### MOL_IFN
+features <- c('H2-D1', 'Ifit1', 'Stat1', 'Bst2')
+FeaturePlot(oligoint.seurat, features = features, label = T, pt.size = 2)
+oligoint.seurat %>% VlnPlot(features = features)
+
+
+## select representative dis assoc oligo datasets capturing a spectrum of pathologies. 
+metadata.list <- read_all_sheets(file = "data/SupplementaryTable4_Metanalysis_GlialReactivityMarkers.xlsx") %>% 
+  .[names(.) %>% grep(pattern = "MOL|_OL_|DOL", ignore.case = T)] %>%  ## keep the OL-related populations
+  lapply(., function(df) df %>% pull()) ## change the dataframes into vectors
+
+oligoint.seurat %<>% AddModuleScore(features = metadata.list, name = names(metadata.list))
+oligoint.seurat[[]] %>% names
+features <- oligo.seurat[[]] %>% names %>% tail(length(metadata.list))
+
+##feature plots
+lapply(features, function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2)
+  (oligoint.seurat %>% FeaturePlot(features = feature, label = F, pt.size = 0.25, max.cutoff = 'q99') & 
+    theme(text = element_text(family = "OpenSans")) & 
+    viridis::scale_color_viridis(option = "rocket", direction = -1, alpha = 1, end = 0.99)
+    ) %>% 
+    ggsave(filename = paste0(ws, "/FeaturePlot_scsnOL_metanalysis_", feature.name, ".tiff"), device = 'tiff', units = "cm", dpi = 300, width = 8, height = 8)
+})
+
+
+##vln plots
+lapply(features, function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2) %>% stringr::str_replace_all(pattern = "_", replacement = " ")
+  print(feature.name)
+  (oligoint.seurat %>% 
+      VlnPlot(features = feature, cols = col.list[["ol_cols"]] , pt.size = 0) & 
+      ylab('Expression signature') &
+      xlab("") &
+      labs(subtitle = feature.name, title = NULL) &
+      theme(text = element_text(family = "OpenSans"),
+            title = element_text(face = 'bold', size = 20),
+            axis.title = element_text(size = 20),
+            axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 20), 
+            axis.text.y = element_text(hjust = 0.5, vjust = 0.5, size = 20)) &
+      NoLegend()      
+  ) %>% ggsave(filename = paste0(ws, "/VlnPlot_Metanalysis_ourSCSN_", feature.name, ".tiff"), device = 'tiff', dpi = 300, units = 'cm', width = 6, height = 5)
+})
+  oligoint.seurat %>% VlnPlot(features = features)
+
+
+#### metanalysis statistical signif
+features
+OLsplitlist <- oligoint.seurat@meta.data %>% group_split(scsnOLAnno); names(OLsplitlist) <- oligoint.seurat$scsnOLAnno %>% levels
+
+wilcox.meta <- lapply(features, function(feature){
+  temp <- lapply(c('MOL_IFN','MOL_DA1', 'MOL_DA2'), function(OL){
+    test.res <- wilcox.test(x = OLsplitlist[[OL]][[feature]],
+                            y = c(OLsplitlist[['MOL2']][[feature]], OLsplitlist[['MOL5/6']][[feature]]), conf.int = T)
+    test.pval <- test.res[["p.value"]]
+  }); names(temp) <- c('MOL_IFN','MOL_DA1', 'MOL_DA2')
+  return(temp)
+}); names(wilcox.meta) <- features; wilcox.meta %<>% unlist %>% p.adjust(method = 'fdr'); wilcox.meta %>% .[. < 0.01] 
+
+#### in spatial
+## plot the spatial plots separately
+spatial.seurat %<>% AddModuleScore(features = metadata.list, name = names(metadata.list))
+lapply(features, function(feature){
+  feature.name <- feature %>% stringr::str_sub(end = -2)
+  print(feature.name)
+  (spatial.seurat %>% 
+      SpatialPlot(features = feature, crop = F, pt.size = 1.35, alpha = c(0.4, 1), images = c('sham', 'D1', 'D3', 'D7'), max.cutoff = 'q99', image.alpha = 0.4, stroke = 0) & 
+      theme(text = element_text(family = plot.font, size = 9), legend.key.size = unit(0.2, 'cm')) & NoLegend() &
+      ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 100) %>% rev, limits = c(min(spatial.seurat[[feature]]), max(spatial.seurat[[feature]])))) %>% 
+  ggsave(filename = paste0(ws, "/SpatialPlot_Metanalysis_", feature.name, ".tiff"), device = 'tiff', dpi = 300, width = 18, height = 6, units = 'cm')
+})
+
+```
+
+
+=== IHC validation === 
+```{r IHC quantification}
+IHC.data <- data.frame(
+  "mcao" = rep(c('Ctrl', 'D1', 'D3', 'D7'), each = 3) %>% factor(levels = c('Ctrl','D1', 'D3', 'D7')),
+  "Plp" = c(1070, 656, 1212 ,# Ctrl; average cell count of three sections per mice, counted for 3 mice separately
+            1872, 2410, 2829,# D1; 
+            2250, 1568, 2795, # D3
+            1374, 3101, 2329 # D7
+            ),
+  "Plp/Serpina3n" = c(1, 0, 0, # Ctrl
+                      6.5, 1.33, 0.67, #D1
+                      5, 4, 5.33, #D3
+                      14.67, 37.67, 24.67 #D7
+    )
+  ) %>% mutate("positives" = (Plp.Serpina3n/Plp)*(100), "permm" = (Plp.Serpina3n/3.75)); IHC.data %>% group_by(mcao) %>% summarize(SDpermm = sd(permm), permm = mean(permm)) -> IHC.summary ## % of PLP/SERPINA3N+ cells
+
+
+## Ctrl vs D7
+IHC.data.D7 <- IHC.data %>% subset(subset = mcao %in% c('Ctrl', 'D7'))
+IHC.summary.D7 <- IHC.summary %>% subset(subset = mcao %in% c('Ctrl', 'D7'))
+
+### testing
+wilcox.test(x = IHC.data.D7$permm[IHC.data.D7$mcao == "D7"],
+            y = IHC.data.D7$permm[IHC.data.D7$mcao == "Ctrl"], conf.int = T#, alternative = 'greater'
+            )
+
+### barplot 
+(ggplot(data = IHC.data, aes(y = permm, x = mcao)) + 
+  geom_bar(data = IHC.summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.85, fill = "#B2182B") +
+  geom_jitter(position = position_jitter(0.2), color = 'black', size= 2, shape = 1, stroke = 0.75) +
+  geom_linerange(data = IHC.summary, aes(ymin = permm-SDpermm, ymax = permm+SDpermm), colour="black", alpha=0.9, size=0.7) +
+  ylim(-0.1, 11) +
+  theme(text = element_text(family = "OpenSans", size = 35), 
+        axis.text.x = element_text(family = "OpenSans", hjust = 1, vjust = 1, size = 35, angle = 45),
+        axis.text.y = element_text(family = "OpenSans", size = 35),
+        axis.ticks = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.background = element_blank(), #transparent panel bg
+        plot.background = element_rect(fill='white'), #transparent plot bg
+        plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm"),
+        panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2)) +  
+        xlab("") + ylab(expression(paste("SERPINA3N+ Plp1+ cells per ", mm^2, "")))) %>% ggsave(filename = file.path(ws, "Barplot_IHC.tiff"), device = "tiff", dpi = 300, width = 2.5, height = 5.5)
+
+ #expression(paste("Lesion Volume [",mm^3, "]"
+
+(ggplot(data = IHC.data.D7, aes(y = positives, x = mcao)) + 
+  geom_bar(data = IHC.summary.D7, stat = "identity", width = 0.6, colour = "black", alpha = 0.85, fill = "#B2182B") +
+  geom_jitter(position = position_jitter(0.2), color = 'black', size= 2, shape = 1, stroke = 0.75) +
+  geom_linerange(data = IHC.summary.D7, aes(ymin = positives-SD, ymax = positives+SD), colour="black", alpha=0.9, size=0.7) +
+  ylim(-0.05, 2) +
+  theme(text = element_text(family = "OpenSans", size = 35), 
+        axis.text.x = element_text(family = "OpenSans", hjust = 1, vjust = 1, size = 35, angle = 45),
+        axis.text.y = element_text(family = "OpenSans", size = 35),
+        axis.ticks = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.background = element_blank(), #transparent panel bg
+        plot.background = element_rect(fill='white'), #transparent plot bg
+        plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm"),
+        panel.grid.major.y = element_line(colour = "#A1A19C", size = 0.2)) +  
+        xlab("") + ylab("% of SERPINA3N+ oligodendrocytes")) %>% ggsave(filename = file.path(ws, "Barplot_IHC_CtrlvsD7.tiff"), device = "tiff", dpi = 300, width = 2, height = 4.5)
+
+```
+
+
+
+
+== Supplementary Figures ==
+
+Full single-nucleus dataset
+Summarizing plots of finalized sn dataset
+```{r summary plots of whole sn dataset}
+DefaultAssay(sn.seurat) <- "RNA" 
+sn.seurat %<>% SetIdent(value = "Celltypes")
+
+# UMAP of Celltypes
+seurat.plots[["UMAP of Celltypes"]] <- sn.seurat %>% 
+  DimPlot(reduction = "umap", pt.size = 1, label = T, group.by = 'Celltypes', cols = col.list$Celltypes) + NoLegend() + NoAxes()
+
+# UMAP of Cell subtypes
+seurat.plots[["UMAP of Cell Subtypes"]] <- sn.seurat %>% 
+  DimPlot(reduction = "umap", pt.size = 1, label = F, group.by = 'CelltypesDetailed', cols = col.list$CelltypesDetailed) + NoLegend() + NoAxes()
+
+# Cell type frequencies
+seurat.plots[["Barplot of Celltypes"]] <- sn.seurat %>% 
+  total_barplot(groupvar = "Celltypes", ylim = 2550)
+
+# Cell Subtype frequencies
+seurat.plots[["Barplot of CellSubtypes"]] <- sn.seurat %>% 
+  total_barplot(groupvar = "CelltypesDetailed", ylim = 900)
+
+# Cell type  proportions
+
+# Markers dotplot
+features <- c('Stmn1', 'Sox4', 'Ccnd2', 'Dcx',   # Neuroblast
+                   'Usp29', 'Snhg11', 'Nhs', # Other Neurons
+                   'Gad1', 'Gad2', # GABAergic
+                   'Meg3', 'Rbfox3',  'Nrgn', 'Slc17a6', 'Slc17a7',  # Glutamatergic
+                   'Ccdc153', 'Foxj1',  # Ependymal
+                   'Aqp4',  'Aldh1l1', 'Slc1a3', 'Gfap',   # Astrocyte
+                   'Pdgfra', 'Cspg4', 'Vcan', # OPC
+                   'Mbp',  'Mobp', 'Plp1', 'Cldn11',    # Oligo
+                   'Cx3cr1', 'Csf1r', # Microglia
+                   'Slc47a1',  'Mgp', 'Ptgds',    # VLMC
+                  'Pdgfrb',  'Flt1', 'Pecam1'    # Vasculature
+                   )
+
+seurat.plots[["Dotplot_Markers"]] <- sn.seurat %>% 
+  dittoSeq::dittoDotPlot(vars = features, group.by = "Celltypes", scale = T)
+
+# Displaying a specific gene
+sn.seurat %>% 
+  dittoSeq::dittoPlot(var = "Apoe", group.by = "Celltypes", plots = c("ridgeplot", "jitter") , assay = "RNA", slot = "data", color.panel = col.list$Celltypes) + theme(legend.position = "none")
+```
+
+Population proportions 
+```{r proportions}
+## proportions
+library(dittoSeq)
+sn.seurat$Condition %>% table
+
+sn.seurat %>% dittoBarPlot(var = "Condition", group.by = "Celltypes", scale = "count")
+sn.seurat %>% dittoBarPlot(var = "Condition", group.by = "Celltypes", scale = "percent")
+
+sn.seurat[['Condition2']] <- case_when( ## simplifying the conditions
+  sn.seurat$Condition == 'sham' ~ 'Ctrl',
+               sn.seurat$Condition == 'D1' ~ 'D1',
+               sn.seurat$Condition == 'D3' ~ 'D3',
+               sn.seurat$Condition == 'D7' ~ 'D7') %>% factor(levels = c('Ctrl', 'D1', 'D3', 'D7'))
+
+ids <- sn.seurat@meta.data$Condition2 %>% levels; categories <- sn.seurat@meta.data$cell_type_1_simplified %>% levels; counts <- matrix(nrow=length(ids), ncol=length(categories)); rownames(counts) <- ids; colnames(counts) <- categories
+for (i in seq_along(ids)) {
+  for (j in seq_along(categories)) {
+    count <- sn.seurat@meta.data %>%
+      filter(Condition2 == ids[i], cell_type_1_simplified == categories[j]) %>%
+      nrow()
+
+    counts[i, j] <- count
+  }
+}; rm(i,j)
+
+counts_mm_0 <- reshape2::melt(counts, id = "rownames") ## total count proportions
+
+ggplot(data = counts_mm_0, aes(x = Var2, y = value, fill = Var1)) + 
+  geom_col(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylab('Proportion of cells')
+counts <- counts/rowSums(counts)
+counts_mm_1 <- reshape2::melt(counts, id = "rownames") ## percent count proportions
+
+## BarPlot on percentage of count proportions
+seurat.plots[["BarPlot_sn_CellTypes1simp_bySample"]] <-  ggplot(data = counts_mm_1, aes(x = Var2, y = value, fill = Var1)) + ## percent count proportions
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 105, hjust = 1, vjust = 0), axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) +
+    ylab('Proportion of nuclei') +
+    xlab("") + ggtitle("") + NoLegend() +
+    theme(axis.text = element_text(family = "OpenSans", size = 25, color = "black"),
+        axis.title = element_text(family = "OpenSans", size = 25),
+        plot.background = element_rect(fill = 'transparent', color = NA),
+        panel.background = element_rect(fill = 'transparent', color = NA)) +
+    scale_fill_manual(values = c("#525475", "#F1D7AB", "#E6B188", "#D18080")); p
+
+
+seurat.plots[["BarPlot_sn_CellTypes1simp_bySample"]] 
+```
+
+

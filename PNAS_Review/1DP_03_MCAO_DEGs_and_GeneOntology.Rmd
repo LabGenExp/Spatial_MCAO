@@ -215,7 +215,7 @@ spatial.seurat %>% SpatialPlot(features = feature, images = c('sham', 'D1', 'D3'
   ggplot2::scale_fill_gradientn(colours = RColorBrewer::brewer.pal(name = "RdBu", n = 11) %>% rev, limits = c(spatial.seurat[[feature]] %>% min, spatial.seurat[[feature]] %>% max))
 ```
 
-```{r read in marker list }
+```{r read in marker list}
 # read to continue after a pause
 markers <- read_all_sheets(file = file.path(ws, "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx"))
 
@@ -278,6 +278,30 @@ temp.upset <- upset(fromList(upset.markers[sets]),
                     keep.order = T) 
 temp.upset
 
+
+# Extracting the intersections
+binary_matrix <- fromList(temp.upset[ctx_regions])
+rownames(binary_matrix) <- temp.upset[ctx_regions] %>% unlist %>% unique
+
+extract_intersections <- function(df) {
+  df %<>% rownames_to_column(var = "rowname") # Convert rownames to a new column
+  
+  # Group by all columns except 'rowname' to find unique combinations
+  categorized_list <- df %>%
+    group_by(across(-rowname)) %>%
+    summarise(rowname_list = list(rowname)) %>%
+    pull(rowname_list)
+  
+  # Sort the sublists by their length in descending order
+  sorted_list <-
+    categorized_list[order(sapply(categorized_list, length), decreasing = TRUE)]
+  return(sorted_list)
+}
+result.list[["UpSet_MarkersUP_GeneCombinations"]] <- extract_intersections(binary_matrix)
+View(result.list[["UpSet_MarkersUP_GeneCombinations"]])
+
+write.xlsx(result.list[["UpSet_MarkersUP_GeneCombinations"]], file = file.path(ws, "UpSet_MarkersUP_GeneCombinations.xlsx"))
+
 # core upset ####
 sets <- c("ISD1c", "ISD3c", "ISD7c", "CTX1-4", "CTX5", "CTX6") %>% rev #selecting regions of interest
 temp.upset <- upset(fromList(upset.markers[sets]), 
@@ -307,7 +331,7 @@ up.core <- markers.up[c("ISD1c", "ISD3c", "ISD7c")] %>% lapply(., function(i){i[
 up.peri <- markers.up[c("ISD1p", "ISD3p", "ISD7p")] %>% lapply(., function(i){i[["gene"]] %>% as.vector}) ## isch peripheries markers
 
 ## ORA
-organism <- org.Mm.eg.db; background <- rownames(spatial.seurat[["SCT"]])
+
 ORA.list <- lapply(c(up.core, up.peri), function(x) enrichGO(gene          = x, # list of genes 
                                                       universe      = background, # 'potential DEGs'
                                                       keyType       = "SYMBOL", # or ENSEMBL
@@ -344,6 +368,37 @@ ORA.list <- lapply(c(down.core, down.peri), function(x) enrichGO(gene          =
 # write.xlsx(ORA.list, file = file.path(ws, "ORAlist_onMarkers_DOWN_IschemicRegions.xlsx"), overwrite = T)
 
 ```
+
+GO of the UpSet gene intersections
+```{r GO of the upset gene intersections}
+library(clusterProfiler)
+library("org.Mm.eg.db", character.only = TRUE)
+
+organism <- org.Mm.eg.db
+background <- rownames(spatial.seurat[["SCT"]])
+if(exists("UpSet_MarkersUP_GeneCombinations", where = result.list)) {
+  GO_intersections <-
+    result.list[["UpSet_MarkersUP_GeneCombinations"]][1:25] %>%
+    lapply(\(x) {
+        enrichGO(
+          gene = x,
+          keyType = "SYMBOL",
+          universe = background,
+          OrgDb = organism,
+          ont = "ALL", # BP = biological process, MF = molecular function, CC = cellular component
+          pAdjustMethod = "fdr",
+          pvalueCutoff = 0.01,
+          qvalueCutoff = 0.2,
+          readable = F,
+          minGSSize = 5
+        )
+    })
+}
+
+names(GO_intersections) <-
+  result.list[["UpSet_MarkersUP_GeneCombinations"]] %>% sapply(length) %>% head(25)
+```
+
 
 Mutual GO terms
 ```{r Upset Plot on ORA results Upregulated}
@@ -690,10 +745,6 @@ Correlation of GO summaries
 
 
 ```
-
-
-
-
 
 
 === Magnetic Resonance Imaging data ===
