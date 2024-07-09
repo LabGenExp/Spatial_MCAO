@@ -738,14 +738,6 @@ print(plot.list[["SpatialPlots_GOsummaries"]][["7DPI_Positive_regulation_of_cell
 
 ```
 
-Correlation of GO summaries
-```{r}
-
-
-
-
-```
-
 
 === Magnetic Resonance Imaging data ===
 ```{r Magnetic resonance imaging MRI}

@@ -1,0 +1,35 @@
+---
+title: "1DPI_XX2_spatial_seurat_for_publishing"
+author: "DanielZucha"
+date: "2024-07-07"
+output: html_document
+---
+
+Hello, 
+
+In this markdown we add metadata from across the analyses performed and adjust the coordinate system to display sections side-by-side available for interactive viewing on nygen's cellhub portal.
+
+To add:
+- Gene ontology processes
+- Deconvolution
+- L-R pair interactions (top 10)
+- Module scores for reactive glial populations
+- Module scores from degenerative diseases
+
+Load data
+```{r load data}
+spatial.seurat <- readRDS(file = file.path("data", "seurat_spatial_integrated_ready_rctdZeng2023.rds"))
+```
+
+Add Gene ontology processes
+```{r}
+# load gene ontology processes
+
+
+# load apoe-trem2 microglia downstream processes
+
+
+```
+
+
+

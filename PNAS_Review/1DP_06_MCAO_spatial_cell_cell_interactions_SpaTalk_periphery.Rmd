@@ -188,7 +188,7 @@ rm(section, full_spatalk)
 ```
 
 Before looking at LR pairs of glia, start by collecting interaction lists of all the celltypes in the periphery
-```{r interaction lists of LR pairs in lesino periphery}
+```{r interaction lists of LR pairs in lesion periphery}
 result.list[["Interaction_lists"]] <- ctrl_sections %>% lapply(\(x){
   temp <- spatalk.list[[x]]@lrpair %>% 
     mutate(Condition = rep(x, times = nrow(.)), 
@@ -210,8 +210,6 @@ SpaTalk::plot_lrpair(spatalk.list[["1DPI"]],
                      ligand = "Bsg", 
                      receptor = "Itgb2")
 ```
-
-
 
 CCI of receiving glia
 ```{r glia receivers}

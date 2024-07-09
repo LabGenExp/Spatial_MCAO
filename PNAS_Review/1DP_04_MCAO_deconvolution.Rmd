@@ -762,8 +762,8 @@ gene_cell_correlations <-
       spatial.seurat %>%
       GetAssayData(assay = "Spatial", layer = "data") %>%
       {
-        .[rowSums(.) > (0.01 * ncol(.)),]
-      } %>% # remove genes with less 1 % positivity
+        .[rowSums(.) > (0.01 * ncol(.)),] # remove genes with less 1 % positivity
+      } %>% 
       t %>%
       as.data.frame() %>%
       rownames_to_column("Barcode") %>%
@@ -775,7 +775,8 @@ gene_cell_correlations <-
       cor(exp_mat,
           celltype_df %>% select(-c(Barcode)),
           method = "pearson") %>%
-      as.data.frame()
+      as.data.frame() %>% 
+      rownames_to_column("GeneSymbols")
     
     return(cor_matrix)
   },

@@ -119,11 +119,15 @@ create_chord_diagram <- function(dec_spatalk_obj, section) {
 dev.off()
 
 # Create and save a layout for 4 plots side by side
-png(filename = file.path(ws, "ChordDiagram_CCI_counts_ctrl_cortex_and_lesion_periphery.png"), res = 1000, units = "mm", width = 430, height = 130)
+png(
+  filename = file.path(ws, "ChordDiagram_CCI_counts_ctrl_cortex_and_lesion_periphery.png"), 
+  res = 1000, 
+  units = "mm", 
+  width = 430, 
+  height = 110)
 layout(matrix(1:4, 1, 4))
 
 # Loop to create and position each plot
-
 for(i in seq_along(ctrl_sections)) {
   par(mar = c(0.5, 0.5, 0.5, 0.5))
   circos.par(cell.padding = c(0,0,0,0))
@@ -148,7 +152,7 @@ plot.list[["Top_LRpairs_Glia_bySender"]] <- top_glia_lr_senders_summary %>%
   geom_text(aes(label = ifelse(total_lr_co_exp_num > 1000, total_lr_co_exp_num, "")), 
             position = position_stack(vjust = 0.5), size = 3, color = "black") +
   scale_fill_manual(values = col.list$zeng.cols, 
-                    guide = guide_legend(nrow = 20)) +
+                    guide = guide_legend(nrow = 4)) +
   labs(
     title = NULL,
     x = "Ligand-Receptor Pair",
@@ -156,7 +160,7 @@ plot.list[["Top_LRpairs_Glia_bySender"]] <- top_glia_lr_senders_summary %>%
     fill = "Cell Type Ligand"
   ) +
   theme_mk + 
-  theme(legend.position = "right", 
+  theme(legend.position = "bottom", 
         legend.justification = c(0.5, 0.5), 
         axis.text.x = element_text(angle = 45, hjust = 1)) + 
   plot_layout_mm(width = 90, height = 70)
@@ -165,7 +169,9 @@ plot.list[["Top_LRpairs_Glia_bySender"]] <- top_glia_lr_senders_summary %>%
 print(plot.list[["Top_LRpairs_Glia_bySender"]])
 png_save_show(plot = plot.list[["Top_LRpairs_Glia_bySender"]], 
               file = file.path(ws, "Top_LRpairs_Glia_bySender.png"), 
-              dpi = 1000)
+              dpi = 1000, 
+              width = 150, 
+              height = 115)
 
 
 # stacked barplot by glial receiver
@@ -256,7 +262,7 @@ Spatial Plot of Apoe-Trem2
 plot.list[["SpatialPlot_lr_ApoeTrem2"]] <- spatial.seurat %>% SpatialPlot(
   features = "Apoe_Trem2_lr_exp", 
   images = c("Ctrl", sections), 
-  image.alpha = 0.2, 
+  image.alpha = 0.05, 
   stroke = 0, 
   crop = T, 
   ncol = 4, 
@@ -268,7 +274,8 @@ plot.list[["SpatialPlot_lr_ApoeTrem2"]] <- spatial.seurat %>% SpatialPlot(
   NoAxes() & 
   scale_fill_gradientn(colors = col.list$gradient_grey_to_red, limits = c(0, 5.1)) & 
   scale_alpha_continuous(range = c(0.75, 1)) & 
-  theme(legend.position = "none")
+  theme(legend.position = "bottom", 
+        panel.border = element_blank())
 
 # plot.list[["SpatialPlot_lr_ApoeTrem2"]] <- plot.list[["SpatialPlot_lr_ApoeTrem2"]] & plot_layout_mm(height = 70, width = 70)
 print(plot.list[["SpatialPlot_lr_ApoeTrem2"]])
@@ -277,7 +284,8 @@ png_save_show(
   plot = plot.list[["SpatialPlot_lr_ApoeTrem2"]], 
   file = file.path(ws, "SpatialPlot_lr_ApoeTrem2.png"), 
   dpi = 1000,
-  height = 70
+  height = 90, 
+  width = 150
 )
 ```
 
@@ -320,7 +328,7 @@ png_save_show(
   plot = plot.list[["Downstream_genes_apoe_trem"]], 
   file = file.path(ws, "Downstream_genes_apoe_trem.png"), 
   dpi = 1000,
-  height = 70, 
+  height = 80, 
   width = 55
 )
 ```
@@ -338,13 +346,13 @@ plot.list[["GO_downstream_apoe_trem"]] <- plot_df %>%
   geom_text(
     aes(label = Description,
         x = hjust),
-    hjust = ifelse(plot_df$Pvalue > 20, 1.2, 0),
+    hjust = ifelse(plot_df$Pvalue > 20, 1.1, 0),
     color = ifelse(plot_df$Pvalue > 20, "white", "black"),
     size = 2.45
   ) +
   xlab("FDR-adjusted P-value") + 
-  ylab("Gene Ontology") + 
-  ggtitle("Microglia-enriched processes downstream of Apoe-Trem2") + 
+  ylab(NULL) + 
+  ggtitle("Apoe-Trem2-induced processes in microglia") + 
   theme_mk + 
   remove_grid + 
   theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
@@ -355,8 +363,8 @@ png_save_show(
   plot = plot.list[["GO_downstream_apoe_trem"]], 
   file = file.path(ws, "GO_downstream_apoe_trem.png"), 
   dpi = 1000,
-  height = 70, 
-  width = 90
+  height = 90, 
+  width = 80
 )
 ```
 
@@ -376,8 +384,8 @@ axis_text_size <- 7
 
 column_annotation = HeatmapAnnotation(
   block = anno_block(
-    gp = gpar(fill = c("#8491B4CC", "#F4C05B"), col = NA),  # Remove border stroke
-    labels = c("GO Terms", "Celltypes"), 
+    gp = gpar(fill = c("#FFFFFF", "#F4C05B"), col = NA),  # Remove border stroke
+    labels = c("Apoe-Trem2-induced processes in Spatial data", "Celltypes"), 
     labels_gp = gpar(col = "black", fontsize = text_size)
   ),
   annotation_height = unit(5, "mm")  # Make the annotation bar thinner
@@ -386,7 +394,7 @@ column_annotation = HeatmapAnnotation(
 # Generate the heatmap
 plot.list[["Heatmap_CCI_periphery"]] <- Heatmap(
   heatmap_data,
-  name = "Mean \nValue",
+  name = "Mean\nModule\nScore",
   cluster_rows = FALSE,
   cluster_columns = FALSE,
   show_row_names = FALSE,
@@ -401,8 +409,8 @@ plot.list[["Heatmap_CCI_periphery"]] <- Heatmap(
   column_names_rot = 45, 
   column_names_gp = gpar(fontsize = axis_text_size),  # Adjust column names text size
   top_annotation = column_annotation,
-  width = unit(ncol(heatmap_data) * 10, "mm"),  # Adjust width
-  height = unit(nrow(heatmap_data) * 10, "mm"),  # Adjust height
+  width = unit(ncol(heatmap_data) * 12, "mm"),  # Adjust width
+  height = unit(nrow(heatmap_data) * 12, "mm"),  # Adjust height
   cell_fun = function(j, i, x, y, width, height, fill) {
     grid.text(sprintf("%.2f", heatmap_data[i, j]), x = x, y = y, 
               gp = gpar(col = ifelse(heatmap_data[i, j] < 0.2, "black", "white"), fontsize = text_size))
@@ -423,8 +431,8 @@ png_save_show(
   plot = plot.list[["Heatmap_CCI_periphery"]], 
   file = file.path(ws, "Heatmap_CCI_periphery.png"), 
   dpi = 1000,
-  height = 70, 
-  width = 150
+  height = 90, 
+  width = 180
 )
 ```
 
@@ -651,14 +659,16 @@ plot.list[["Bulk_apoe_trem_processes"]] <-
                "GO_Proteasome.complex1" = "Proteasome Complex", 
                "GO_Tissue.remodeling1" = "Tissue Remodeling"
              ))) +  # Facet by process, with each process in a single row
-  labs(x = NULL, y = "Normalized Score", fill = "Injury Status") +
+  labs(x = NULL, y = "Normalized Score", fill = NULL) +
   theme(
     text = element_text(size = 14),
     axis.text.x = element_text(angle = 45, hjust = 1),
     strip.text.y = element_text(angle = 0),
     legend.position = "bottom"
   ) +
-  scale_fill_manual(values = c("FCI_Control" = "#525475", "FCI_Sham" = "#5F4C62", "FCI_MCAO" = "#D18080")) +
+  scale_fill_manual(
+    values = c("FCI_Control" = "#525475", "FCI_Sham" = "#5F4C62", "FCI_MCAO" = "#D18080"), 
+    guide = guide_legend(nrow = 1)) +
   scale_y_continuous(breaks = c(0,1)) + 
   ggtitle(label = "Bulk Transcriptomics: Apoe-Trem2 Downstream Processes") + 
   theme_mk + 
@@ -671,12 +681,11 @@ plot.list[["Bulk_apoe_trem_processes"]] <-
 
 print(plot.list[["Bulk_apoe_trem_processes"]])
 
-
 png_save_show(
   plot = plot.list[["Bulk_apoe_trem_processes"]], 
   file = file.path(ws, "Bulk_apoe_trem_processes.png"), 
   dpi = 1000,
-  height = 70, 
+  height = 100, 
   width = 120
 )
 ```
