@@ -728,10 +728,39 @@ if(myRCTD.list[[1]]@config$RCTDmode == "multi"){ # processing multi-mode results
 }
 ```
 
+Rename sections based on time and bregma location
+```{r rename images based on time and bregma location}
+spatial.seurat@images %>% names
+names(spatial.seurat@images) <- c("3DPI_Bregma_0.4", "3DPI_Bregma_-0.8", "3DPI_Bregma_-2.0", "3DPI_Bregma_-3.2", 
+                               "Sham_Bregma_0.4", "Sham_Bregma_-0.8", "Sham_Bregma_-2.0", "Sham_Bregma_-3.2")
+```
+
+Add Simplify the brain region annotation
+```{r simplify brain region annotation}
+spatial.seurat@meta.data %<>% 
+  mutate(BrainArea = factor(case_when(
+    BrainRegionShort == "AMY" ~ "Telencephalon", 
+    BrainRegionShort == "CP" ~ "Telencephalon", 
+    BrainRegionShort == "CS" ~ "Telencephalon", 
+    BrainRegionShort == "CTX1-4" ~ "Cortex", 
+    BrainRegionShort == "CTX5-6" ~ "Cortex", 
+    BrainRegionShort == "FT" ~ "Telencephalon", 
+    BrainRegionShort == "GLS" ~ "Cortex", 
+    BrainRegionShort == "HIP" ~ "Telencephalon", 
+    BrainRegionShort == "HY" ~ "Diencephalon", 
+    BrainRegionShort == "ISD3c" ~ "Lesion", 
+    BrainRegionShort == "ISD3p" ~ "Lesion", 
+    BrainRegionShort == "PIR" ~ "Telencephalon", 
+    BrainRegionShort == "TH" ~ "Diencephalon", 
+    BrainRegionShort == "V" ~ "Telencephalon"
+  ), levels = c("Diencephalon", "Telencephalon", "Cortex", "Lesion")))
+```
+
 save spatial with RCTD data
 ```{r save spatial after deconvo}
 saveRDS(spatial.seurat, file = file.path("data", "Metadata",  "spatialseurat_Han2024_annotated_rctdZeng2023.rds"))
 ```
+
 
 ```{r RCTD SpatialPlot}
 # Spatial plots, rocket color gradient for all
@@ -1520,9 +1549,9 @@ spatial.seurat@meta.data %<>% mutate("BrainRegionShort" = factor(case_when(
   seurat_clusters == 2 ~ "CTX6", 
   seurat_clusters == 3 ~ "CTX1-4", 
   seurat_clusters == 4 ~ "ISD3c",
-  seurat_clusters == 5 ~ "HT", 
+  seurat_clusters == 5 ~ "HY", 
   seurat_clusters == 6 ~ "CP", 
-  seurat_clusters == 7 ~ "HT",
+  seurat_clusters == 7 ~ "HY",
   seurat_clusters == 8 ~ "CTX5", 
   seurat_clusters == 9 ~ "TH", 
   seurat_clusters == 10 ~ "PIR", 
@@ -1540,6 +1569,24 @@ spatial.seurat@meta.data %<>% mutate("BrainRegionShort" = factor(case_when(
 
 # set annotated regions as default ident
 Idents(spatial.seurat) <- "BrainRegionShort"
+
+# Simplified brain areas
+spatial.seurat@meta.data %<>% 
+  mutate(BrainArea = factor(case_when(
+    BrainRegionShort == "AMY" ~ "Telencephalon", 
+    BrainRegionShort == "CP" ~ "Telencephalon", 
+    BrainRegionShort == "CS" ~ "Telencephalon", 
+    BrainRegionShort == "CTX1-4" ~ "Cortex", 
+    BrainRegionShort == "CTX5" ~ "Cortex", 
+    BrainRegionShort == "CTX6" ~ "Cortex", 
+    BrainRegionShort == "FT" ~ "Telencephalon", 
+    BrainRegionShort == "GLS" ~ "Cortex", 
+    BrainRegionShort == "HY" ~ "Diencephalon", 
+    BrainRegionShort == "ISD3c" ~ "Lesion", 
+    BrainRegionShort == "ISD7p" ~ "Lesion", 
+    BrainRegionShort == "PIR" ~ "Telencephalon", 
+    BrainRegionShort == "TH" ~ "Diencephalon"
+  ), levels = c("Diencephalon", "Telencephalon", "Cortex", "Lesion")))
 ```
 
 ```{r plot annotated regions}
@@ -1767,6 +1814,12 @@ if(myRCTD.list[[1]]@config$RCTDmode == "multi"){ # processing multi-mode results
 } else {
   message("RCTD ran in doublet mode. Processing code is missing.")
 }
+```
+
+rename images
+```{r rename scott section images}
+spatial.seurat@images %>% names
+names(spatial.seurat@images) <- c("10DPI", "21DPI", "2DPI", "Sham")
 ```
 
 save spatial with RCTD data

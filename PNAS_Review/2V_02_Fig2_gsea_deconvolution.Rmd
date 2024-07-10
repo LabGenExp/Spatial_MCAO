@@ -130,11 +130,11 @@ plot.list[["SpatialPlots_GOsummaries"]] <-
       NoAxes() &
       theme(legend.position = "none",
             panel.border = element_blank()) &
-      scale_alpha_continuous(range = c(0.8, 1)) &
       scale_fill_gradientn(
         colours = col.list$gradient_blue_yellow_red,
         values = scales::rescale(color_values, from = limits)
       ) &
+      scale_alpha_continuous(range = c(0.8, 1)) &
       labs(title = NULL, subtitle = x)
     
     return(plot)
@@ -384,7 +384,7 @@ png_save_show(plot = plot.list[["PieChart_Lesion_CloseUp"]],
 ```
 
 Expression of selected chemokines
-```{r chemokine expression on day 1}
+```{r chemokine expression}
 chemokines <- c("Ccl12", "Ccl3", "Ccl4")
 
 plot.list[["Spatial_Chemokines"]] <- 

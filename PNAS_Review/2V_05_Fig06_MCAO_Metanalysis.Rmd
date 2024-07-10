@@ -1,0 +1,614 @@
+---
+title: "2V_05_Fig06_MCAO_Metanalysis"
+author: "DanielZucha"
+date: "2024-07-09"
+output: html_document
+---
+
+Hello, 
+
+In this markdown we visualize our findings concerning glial response to ischemic injury in publicly available data. For spatial, we use the [Han et al 2024](https://www.science.org/doi/10.1126/scitranslmed.adg1323) and [Scott et al 2024](https://www.nature.com/articles/s41467-024-45821-y) datasets. Both Visium platforms.
+
+
+libraries
+```{r libraries}
+library(Seurat)
+library(SeuratWrappers)
+library(tidyverse)
+library(magrittr)
+library(patchwork)
+source("code/supporting_functions_MCAO.R")
+
+## options
+tidyverse_priority()
+options(Seurat.object.assay.version = "v5")
+options(future.globals.maxSize = 1e9)
+```
+
+working space and lists
+```{r working space and lists}
+# ws
+if(!dir.exists("results/PNAS/Fig06")){dir.create("results/PNAS/Fig06")
+  ws <- "results/PNAS/Fig06"}else{ws <- "results/PNAS/Fig06"}
+
+
+# lists for storing results
+plot.list <- list()
+result.list <- list()
+```
+
+load data
+```{r load data}
+# Han 2024
+han.spatial <- readRDS(file.path("data", "Metadata", "spatialseurat_Han2024_annotated_rctdZeng2023.rds"))
+han.images <- c("Sham_Bregma_-2.0", "3DPI_Bregma_0.4", "3DPI_Bregma_-0.8", "3DPI_Bregma_-2.0")
+han.spatial@meta.data %>% glimpse
+
+# Scott 2024
+scott.spatial <- readRDS(file.path("data", "Metadata", "spatialseurat_Scott2024_annotated_rctdZeng2023.rds"))
+scott.images <- c("Sham", "2DPI", "10DPI", "21DPI")
+scott.spatial@meta.data %>% glimpse
+
+
+
+```
+
+lesion and nfeatures
+```{r lesion and nfeatures}
+# Han 2024
+plot.list[["Spatial_Han_BrainRegionShort"]] <-
+  han.spatial %>%
+  SpatialPlot(
+    group.by = "BrainRegionShort",
+    images = han.images,
+    crop = T,
+    image.alpha = 0,
+    pt.size.factor = 1.7,
+    stroke = 0,
+    cols = col.list$cols_mono_short
+  ) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  NoLegend() &
+  theme(panel.border = element_blank())
+
+print(plot.list[["Spatial_Han_BrainRegionShort"]])
+png_save_show(
+  plot = plot.list[["Spatial_Han_BrainRegionShort"]], 
+  file = file.path(ws, "Spatial_Han_BrainRegionShort.png"), 
+  dpi = 1000, 
+  height = 80, 
+  width = 160
+)
+
+
+Idents(han.spatial) <- "BrainArea"
+plot.list[["VlnPlot_Han_nfeature"]] <-
+  han.spatial %>%
+  enh_vlnplot(
+    feature = "nFeature_Spatial",
+    grouping = "BrainArea",
+    colors = col.list$BrainAreas,
+    idents = c("Cortex", "Lesion"),
+    compare_means = TRUE,
+    ref.group = "Cortex"
+  ) &
+  theme_mk &
+  remove_grid &
+  NoLegend() &
+  labs(x = NULL,
+       y = "nFeature",
+       title = NULL)
+print(plot.list[["VlnPlot_Han_nfeature"]])
+
+png_save_show(
+  plot = plot.list[["VlnPlot_Han_nfeature"]], 
+  file = file.path(ws, "VlnPlot_Han_nfeature.png"), 
+  dpi = 1000, 
+  height = 80, 
+  width = 50
+)
+
+# Scott 2024
+plot.list[["Spatial_Scott_BrainRegionShort"]] <-
+  scott.spatial %>%
+  SpatialPlot(
+    group.by = "BrainRegionShort",
+    images = scott.images,
+    crop = T,
+    image.alpha = 0,
+    pt.size.factor = 1.7,
+    stroke = 0,
+    cols = col.list$cols_mono_short
+  ) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  NoLegend() &
+  theme(panel.border = element_blank())
+print(plot.list[["Spatial_Scott_BrainRegionShort"]])
+
+png_save_show(
+  plot = plot.list[["Spatial_Scott_BrainRegionShort"]], 
+  file = file.path(ws, "Spatial_Scott_BrainRegionShort.png"), 
+  dpi = 1000, 
+  height = 80, 
+  width = 160
+)
+
+
+Idents(scott.spatial) <- "BrainArea"
+plot.list[["VlnPlot_Scott_nfeature"]] <-
+  scott.spatial %>%
+  enh_vlnplot(
+    feature = "nFeature_Spatial",
+    grouping = "BrainArea",
+    colors = col.list$BrainAreas,
+    idents = c("Cortex", "Lesion"),
+    compare_means = TRUE,
+    ref.group = "Cortex"
+  ) &
+  theme_mk &
+  remove_grid &
+  NoLegend() &
+  labs(x = NULL,
+       y = "nFeature",
+       title = NULL)
+print(plot.list[["VlnPlot_Scott_nfeature"]])
+
+png_save_show(
+  plot = plot.list[["VlnPlot_Scott_nfeature"]], 
+  file = file.path(ws, "VlnPlot_Scott_nfeature.png"), 
+  dpi = 1000, 
+  height = 80, 
+  width = 50
+)
+
+```
+
+glial proportion
+```{r glial proportion}
+library(viridis)
+glia <- c("RCTD_Astrocytes", "RCTD_Microglia", "RCTD_OLs")
+
+# Han 2024
+han.spatial@meta.data %>% colnames
+plot.list[["SpatialPlot_Han_Glia"]] <-
+  han.spatial %>%
+  SpatialPlot(
+    features = glia,
+    images = han.images,
+    image.alpha = 0,
+    stroke = 0,
+    crop = TRUE
+  ) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  NoLegend() &
+  scale_alpha_continuous(c(0.9, 1)) &
+  viridis::scale_fill_viridis(option = 'rocket',
+                              direction = -1,
+                              limits = c(0, 1)) &
+  theme(panel.border = element_blank())
+print(plot.list[["SpatialPlot_Han_Glia"]])
+
+png_save_show(
+  plot = plot.list[["SpatialPlot_Han_Glia"]], 
+  file = file.path(ws, "SpatialPlot_Han_Glia.png"), 
+  show_plot = FALSE, 
+  dpi = 1000, 
+  height = 100, 
+  width = 180
+)
+
+
+# Scott 2024
+plot.list[["SpatialPlot_Scott_Glia"]] <-
+  scott.spatial %>%
+  SpatialPlot(
+    features = glia,
+    images = scott.images,
+    image.alpha = 0,
+    stroke = 0,
+    crop = TRUE
+  ) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  NoLegend() &
+  scale_alpha_continuous(c(0.9, 1)) &
+  viridis::scale_fill_viridis(option = 'rocket',
+                              direction = -1,
+                              limits = c(0, 1)) &
+  theme(panel.border = element_blank())
+print(plot.list[["SpatialPlot_Scott_Glia"]])
+
+png_save_show(
+  plot = plot.list[["SpatialPlot_Scott_Glia"]], 
+  file = file.path(ws, "SpatialPlot_Scott_Glia.png"), 
+  show_plot = FALSE, 
+  dpi = 1000, 
+  height = 100, 
+  width = 180
+)
+
+
+```
+
+apoe-trem2 presence
+```{r apoe trem2}
+compute_coexpression <- \(dataset, ligand, receptor, pair_name){
+  # compute expression value of LR pair (the minimum of the two)
+  mtx <- dataset %>% 
+    GetAssayData(assay = "Spatial", layer = "data") %>% 
+    .[c(ligand, receptor), ] %>% 
+    t %>% 
+    as.data.frame() %>% 
+    rownames_to_column(var = "Barcodes") %>% 
+    dplyr::rename(
+      exp_ligand = .data[[ligand]], 
+      exp_receptor = .data[[receptor]]) %>% 
+    rowwise() %>% 
+    mutate(!!pair_name := case_when(
+      exp_ligand == 0 | exp_receptor == 0 ~ 0, 
+      TRUE ~ min(c(exp_ligand, exp_receptor))
+    )) %>% 
+    ungroup()
+  
+  # add to spatial.seurat data
+  dataset@meta.data %<>% rownames_to_column(var = "Barcodes")
+  dataset@meta.data %<>% right_join(y = mtx, by = "Barcodes")
+  dataset@meta.data %<>% 
+    mutate(barcode = Barcodes) %>% 
+    column_to_rownames(var = "Barcodes")
+  dataset@meta.data[[pair_name]] %>% summary %>% print
+  
+  return(dataset)
+}
+
+# Han2024
+han.spatial %<>% 
+  compute_coexpression(
+    ligand = "Apoe", 
+    receptor = "Trem2", 
+    pair_name = "LR_Apoe_Trem2")
+
+plot.list[["SpatialPlot_Han2024_LR_ApoeTrem2"]] <-
+  han.spatial %>%
+  SpatialPlot(
+    features = "LR_Apoe_Trem2",
+    images = han.images,
+    image.alpha = 0,
+    stroke = 0,
+    crop = T,
+    ncol = 4,
+    pt.size.factor = 1.9,
+    combine = TRUE
+  ) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  scale_fill_gradientn(colors = col.list$gradient_grey_to_red,
+                       limits = c(0, 5.1)) &
+  scale_alpha_continuous(range = c(0.75, 1)) &
+  theme(legend.position = "none",
+        panel.border = element_blank())
+print(plot.list[["SpatialPlot_Han2024_LR_ApoeTrem2"]])
+
+png_save_show(
+  plot = plot.list[["SpatialPlot_Han2024_LR_ApoeTrem2"]], 
+  file = file.path(ws, "SpatialPlot_Han2024_LR_ApoeTrem2.png"), 
+  dpi = 1000, 
+  height = 80, 
+  width = 160
+)
+
+
+# Scott 2024
+scott.spatial %<>% 
+  compute_coexpression(
+    ligand = "Apoe", 
+    receptor = "Trem2", 
+    pair_name = "LR_Apoe_Trem2")
+
+plot.list[["SpatialPlot_Scott2024_LR_ApoeTrem2"]] <-
+  scott.spatial %>%
+  SpatialPlot(
+    features = "LR_Apoe_Trem2",
+    images = scott.images,
+    image.alpha = 0,
+    stroke = 0,
+    crop = T,
+    ncol = 4,
+    pt.size.factor = 1.9,
+    combine = TRUE
+  ) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  NoLegend() &
+  scale_fill_gradientn(colors = col.list$gradient_grey_to_red,
+                       limits = c(0, 5.1)) &
+  scale_alpha_continuous(range = c(0.75, 1)) &
+  theme(legend.position = "bottom",
+        panel.border = element_blank())
+print(plot.list[["SpatialPlot_Scott2024_LR_ApoeTrem2"]])
+
+png_save_show(
+  plot = plot.list[["SpatialPlot_Scott2024_LR_ApoeTrem2"]], 
+  file = file.path(ws, "SpatialPlot_Scott2024_LR_ApoeTrem2.png"), 
+  dpi = 1000, 
+  height = 80, 
+  width = 160
+)
+```
+
+chemokines and reactive genes
+```{r chemokines and reactive genes}
+chemokines <- c("Ccl12", "Ccl3", "Ccl4")
+reactive_ols <- c("Serpina3n", "Klk6", "C4b")
+
+# Han 2024
+han.spatial %>%
+  SpatialPlot(
+    features = reactive_ols,
+    images = han.images,
+    crop = TRUE,
+    ncol = length(han.images),
+    pt.size.factor = 2.5,
+    stroke = 0,
+    image.alpha = 0
+  ) & 
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  theme(panel.border = element_blank(),
+        legend.position = "none") & 
+  scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+  scale_alpha_continuous(c(0.8, 1))
+
+
+# Scott 2024
+scott.spatial %>%
+  SpatialPlot(
+    features = reactive_ols,
+    images = scott.images,
+    crop = TRUE,
+    ncol = length(han.images),
+    pt.size.factor = 2.5,
+    stroke = 0,
+    image.alpha = 0
+  ) &
+  theme_mk &
+  remove_grid &
+  NoAxes() &
+  theme(panel.border = element_blank(),
+        legend.position = "none") & 
+  scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+  scale_alpha_continuous(c(0.8, 1))
+```
+
+reactive glia modules
+```{r reactive glia modules}
+reac_glia_marker_list <- 
+  read_all_sheets(file = file.path("data", "SupplementaryTable6_sn_sc_Markers_GOanalysis.xlsx")) %>% 
+  .[c("SN_Ast_Reactive Astrocytes", "SN_MG_Reactive Microglia", "intSNSC_MOL_IFN", "intSNSC_MOL_DA1", "intSNSC_MOL_DA2")] %>% 
+  lapply(\(x){x %>% pull(gene) %>% head(15)})
+  
+
+spatial_reac_glia_plot <- \(dataset, celltype_color, ...) {
+  plot <- 
+  dataset %>%
+    SpatialPlot(
+      image.alpha = 0,
+      stroke = 0,
+      crop = TRUE, 
+      ...
+    ) &
+    theme_mk &
+    remove_grid &
+    NoAxes() &
+    scale_alpha_continuous(c(0.8, 1)) &
+    scale_fill_gradient2(
+      low = "grey60",
+      mid = "#FFFFFF",
+      high = celltype_color,
+      midpoint = 0
+    ) &
+    theme(panel.border = element_blank(),
+          legend.position = "none")
+  return(plot)
+}
+
+
+# Han 2024
+han.spatial %<>% AddModuleScore(reac_glia_marker_list, name = names(reac_glia_marker_list))
+han.spatial@meta.data %>% names %>% tail(length(reac_glia_marker_list))
+
+## astro
+plot.list[["Spatialplot_Han_Reac_Astro_module"]] <- 
+  han.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "SN_Ast_Reactive Astrocytes1", 
+    images = han.images,
+    celltype_color = "#014636")
+
+print(plot.list[["Spatialplot_Han_Reac_Astro_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Han_Reac_Astro_module"]], 
+  file = file.path(ws, "Spatialplot_Han_Reac_Astro_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## microglia
+plot.list[["Spatialplot_Han_Reac_Microglia_module"]] <- 
+  han.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "SN_MG_Reactive Microglia2", 
+    images = han.images,
+    celltype_color = "#A50F15" )
+
+print(plot.list[["Spatialplot_Han_Reac_Microglia_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Han_Reac_Microglia_module"]], 
+  file = file.path(ws, "Spatialplot_Han_Reac_Microglia_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## mol ifn
+plot.list[["Spatialplot_Han_MOL_IFN_module"]] <- 
+  han.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "intSNSC_MOL_IFN3", 
+    images = han.images,
+    celltype_color = "#211E61")
+
+print(plot.list[["Spatialplot_Han_MOL_IFN_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Han_MOL_IFN_module"]], 
+  file = file.path(ws, "Spatialplot_Han_MOL_IFN_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## mol da1
+plot.list[["Spatialplot_Han_MOL_DA1_module"]] <- 
+  han.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "intSNSC_MOL_DA14", 
+    images = han.images,
+    celltype_color = "#211E61")
+
+print(plot.list[["Spatialplot_Han_MOL_DA1_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Han_MOL_DA1_module"]], 
+  file = file.path(ws, "Spatialplot_Han_MOL_DA1_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## mol da2
+plot.list[["Spatialplot_Han_MOL_DA2_module"]] <- 
+  han.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "intSNSC_MOL_DA25", 
+    images = han.images,
+    celltype_color = "#211E61")
+
+print(plot.list[["Spatialplot_Han_MOL_DA2_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Han_MOL_DA2_module"]], 
+  file = file.path(ws, "Spatialplot_Han_MOL_DA2_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+# Scott 2024
+scott.spatial %<>% AddModuleScore(reac_glia_marker_list, name = names(reac_glia_marker_list))
+scott.spatial@meta.data %>% names %>% tail(length(reac_glia_marker_list))
+
+## astro
+plot.list[["Spatialplot_Scott_Reac_Astro_module"]] <- 
+  scott.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "SN_Ast_Reactive Astrocytes1", 
+    images = scott.images,
+    celltype_color = "#014636")
+
+print(plot.list[["Spatialplot_Scott_Reac_Astro_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Scott_Reac_Astro_module"]], 
+  file = file.path(ws, "Spatialplot_Scott_Reac_Astro_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## microglia
+plot.list[["Spatialplot_Scott_Reac_Microglia_module"]] <- 
+  scott.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "SN_MG_Reactive Microglia2", 
+    images = scott.images,
+    celltype_color = "#A50F15" )
+
+print(plot.list[["Spatialplot_Scott_Reac_Microglia_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Scott_Reac_Microglia_module"]], 
+  file = file.path(ws, "Spatialplot_Scott_Reac_Microglia_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## mol ifn
+plot.list[["Spatialplot_Scott_MOL_IFN_module"]] <- 
+  scott.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "intSNSC_MOL_IFN3", 
+    images = scott.images,
+    celltype_color = "#211E61")
+
+print(plot.list[["Spatialplot_Scott_MOL_IFN_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Scott_MOL_IFN_module"]], 
+  file = file.path(ws, "Spatialplot_Scott_MOL_IFN_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## mol da1
+plot.list[["Spatialplot_Scott_MOL_DA1_module"]] <- 
+  scott.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "intSNSC_MOL_DA14", 
+    images = scott.images,
+    celltype_color = "#211E61")
+
+print(plot.list[["Spatialplot_Scott_MOL_DA1_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Scott_MOL_DA1_module"]], 
+  file = file.path(ws, "Spatialplot_Scott_MOL_DA1_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+## mol da2
+plot.list[["Spatialplot_Scott_MOL_DA2_module"]] <- 
+  scott.spatial %>% 
+  spatial_reac_glia_plot(
+    features = "intSNSC_MOL_DA25", 
+    images = scott.images,
+    celltype_color = "#211E61")
+
+print(plot.list[["Spatialplot_Scott_MOL_DA2_module"]])
+
+png_save_show(
+  plot = plot.list[["Spatialplot_Scott_MOL_DA2_module"]], 
+  file = file.path(ws, "Spatialplot_Scott_MOL_DA2_module.png"), 
+  dpi = 1000, 
+  height = 80,
+  width  = 160
+)
+
+```
