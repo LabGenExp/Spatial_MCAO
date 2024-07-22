@@ -490,7 +490,7 @@ library(viridis)
 heatmap_data <- spatial.seurat@meta.data %>% 
   filter((DetailedRegionAnnoShort %in% periphery_regions & Condition %in% sections)) %>% 
   mutate(across(starts_with("GO_"), 
-                min_max_normalize)) %>% 
+                ~ min_max_normalize(.) * Apoe_Trem2_lr_exp)) %>% 
   group_by(Condition) %>% 
   summarise(
     `Proteasome Complex` = mean(`GO_Proteasome complex1`), 

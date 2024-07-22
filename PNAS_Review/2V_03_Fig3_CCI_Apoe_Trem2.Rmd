@@ -43,7 +43,6 @@ source("code/supporting_functions_MCAO.R")
 if(!dir.exists("results/PNAS/Fig03")){dir.create("results/PNAS/Fig03")
   ws <- "results/PNAS/Fig03"}else{ws <- "results/PNAS/Fig03"}
 
-
 # lists for storing results
 plot.list <- list()
 result.list <- list()
@@ -84,7 +83,7 @@ for(section in ctrl_sections) {
 
 create_chord_diagram <- function(dec_spatalk_obj, section) {
   
-  # summarize the 
+  # summarize the lr pairs
   lrpairs <- dec_spatalk_obj@lrpair %>% 
     group_by(celltype_sender, celltype_receiver) %>% 
     summarise(
@@ -92,11 +91,15 @@ create_chord_diagram <- function(dec_spatalk_obj, section) {
       .groups = "drop"
     )
   
+  # define order of the plotted celltypes
+  order_celltypes_for_circos <- c("Astrocytes", "ChoroidPlexusCells",  "EpendymalCells", "Fibroblasts", "Granulocytes", "Microglia", "EndothelialCells", "Neuroblast", "Neurons", "PeripheralMyeloidCells", "OLs", "VSMCs", "OPCs", "Pericytes", "Tcells")
+  
   circlize::chordDiagram(
     lrpairs, 
-    grid.col = col.list$zeng.cols, 
+    grid.col = col.list$zeng.cols,
+    order = order_celltypes_for_circos,
     directional = 1, 
-    reduce = 0.04, 
+    reduce = 0.027, 
     annotationTrack = "grid", 
     preAllocateTracks = list(track.height = 0.05)
   )
@@ -113,7 +116,7 @@ create_chord_diagram <- function(dec_spatalk_obj, section) {
     bg.border = NA
   ) # here set bg.border to NA is important
   
-  title(section, line = -1)
+  title(paste0(section), line = -1)
   circos.clear()
 }
 dev.off()
@@ -352,7 +355,7 @@ plot.list[["GO_downstream_apoe_trem"]] <- plot_df %>%
   ) +
   xlab("FDR-adjusted P-value") + 
   ylab(NULL) + 
-  ggtitle("Apoe-Trem2-induced processes in microglia") + 
+  ggtitle("SpaTalk Prediction: ApoE-Trem2 Downstream Processes") + 
   theme_mk + 
   remove_grid + 
   theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
@@ -385,7 +388,7 @@ axis_text_size <- 7
 column_annotation = HeatmapAnnotation(
   block = anno_block(
     gp = gpar(fill = c("#FFFFFF", "#F4C05B"), col = NA),  # Remove border stroke
-    labels = c("Apoe-Trem2-induced processes in Spatial data", "Celltypes"), 
+    labels = c("Spatial Transcriptomics: ApoE-Trem2 Downstream Processes", "Celltypes"), 
     labels_gp = gpar(col = "black", fontsize = text_size)
   ),
   annotation_height = unit(5, "mm")  # Make the annotation bar thinner
@@ -440,62 +443,63 @@ Spatial Plot of the enriched GO terms
 ```{r Spatial Plot of enriched GO terms}
 # min_max the GO terms
 spatial.seurat@meta.data %<>% 
-  mutate(across(starts_with("GO_"), 
-                min_max_normalize))
+  mutate(across(starts_with("GO_"), min_max_normalize))
 
 spatial.seurat@meta.data %>% colnames
 
-spatial.seurat %>% SpatialPlot(
-  features = c("GO_Proteasome complex1",
-               "GO_Neuron apoptotic process2",
-               "GO_Positive regulation of erk1 and erk2 cascade3", 
-               "GO_Gliogenesis4",
-               "GO_Glucose metabolic process5",
-               "GO_Chemotaxis6", 
-               "GO_Positive regulation of cytokine production7", 
-               "GO_Tissue remodeling8"), 
-  images = c("Ctrl", sections),
-  image.alpha = 0.2, 
-  stroke = 0, 
-  crop = T, 
-  ncol = 4, 
-  pt.size.factor = 1.9, 
-  combine = TRUE
-  ) & 
+plot.list[["Spatial_GO"]] <-
+  spatial.seurat %>% SpatialPlot(
+    features = c(
+      "GO_Proteasome complex1",
+      "GO_Neuron apoptotic process2",
+      "GO_Erk1 and erk2 cascade3",
+      "GO_Positive regulation of cytokine production4",
+      "GO_Chemotaxis5",
+      "GO_Gliogenesis6",
+      "GO_Tissue remodeling7",
+      "GO_Glucose metabolic process8"
+    ),
+    images = c("Ctrl", sections),
+    image.alpha = 0.2,
+    stroke = 0,
+    crop = T,
+    ncol = 4,
+    pt.size.factor = 1.9,
+    combine = TRUE
+  ) &
   theme_mk &
   remove_grid &
-  NoAxes() & 
+  NoAxes() &
   NoLegend() &
-  scale_fill_gradientn(colors = col.list$gradient_blue_yellow_red) & 
+  scale_fill_gradientn(colors = col.list$gradient_blue_yellow_red, limits = c(0, 1)) &
   scale_alpha_continuous(range = c(0.75, 1))
 
-
-
-# The most interesting ones to me are the Glucose metabolic processes
-plot.list[["Spatial_GO"]] <- spatial.seurat %>% SpatialPlot(
-  features = c("GO_Positive regulation of cytokine production7", "GO_Tissue remodeling8"), 
-  images = sections,
-  image.alpha = 0.2, 
-  stroke = 0, 
-  crop = T, 
-  ncol = 3, 
-  pt.size.factor = 1.9, 
-  combine = TRUE
-  ) & 
-  theme_mk &
-  remove_grid &
-  NoAxes() & 
-  NoLegend() &
-  scale_fill_gradientn(colors = col.list$gradient_blue_yellow_red) & 
-  scale_alpha_continuous(range = c(0.75, 1))
 print(plot.list[["Spatial_GO"]])
 
 png_save_show(
   plot = plot.list[["Spatial_GO"]], 
   file = file.path(ws, "Spatial_GO.png"), 
   dpi = 1000,
-  height = 70
+  height = 270, 
+  width = 180
 )
+
+
+spatial.seurat %>%
+  VlnPlot(
+    features = c(
+      "GO_Proteasome complex1",
+      "GO_Neuron apoptotic process2",
+      "GO_Erk1 and erk2 cascade3",
+      "GO_Positive regulation of cytokine production4",
+      "GO_Chemotaxis5",
+      "GO_Gliogenesis6",
+      "GO_Tissue remodeling7",
+      "GO_Glucose metabolic process8"
+    ), 
+    idents = c("ISD1p", "ISD3p", "ISD7p")
+  )
+
 ```
 
 # IHC validation
@@ -503,7 +507,7 @@ Microglia (Iba1) volume in time
 ```{r microglia volume}
 result.list[["IHC_validations"]] <- 
   read_all_sheets(
-    file = file.path("results", "PNAS", "MCAO_IHC_Validations.xlsx"))
+    file = file.path("results", "PNAS", "Tables", "MCAO_IHC_Validations.xlsx"))
 
 
 volume_iba <- 
@@ -523,31 +527,36 @@ volume_iba_condition_summary <-
   volume_iba %>% 
   dplyr::group_by(Condition) %>% 
   summarise(
-    Mean_VolIba = mean(Mean_VolIba), 
     SD_VolIba = sd(Mean_VolIba),
+    Mean_VolIba = mean(Mean_VolIba), 
     .groups = "drop")
   
 
 # plot
 plot.list[["Barplot_VolumeIba1"]] <- 
   ggplot(data = volume_iba, aes(x = Condition, y = Mean_VolIba)) + 
-  geom_bar(data = volume_iba_condition_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#79A69B", size = 0.5) +
+  geom_bar(data = volume_iba_condition_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#2CA02C", size = 0.5) +
   geom_errorbar(data = volume_iba_condition_summary, aes(ymin = Mean_VolIba-SD_VolIba, ymax = Mean_VolIba+SD_VolIba), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  annotate(geom = "text", x = 2.5, y = 21, label = signif_label, vjust = -0.5, hjust = 0.5, size = 2.45) +
-  annotate(geom = "segment", x = 2, xend = 3, y = 20, yend = 20, color = "black") +
-  ylim(0, 25) +
+  annotate(geom = "text", x = 1, y = 3000, label = signif_label, vjust = -0.5, hjust = 0.5, size = 2.45) +
+  ylim(0, 3500) +
   xlab(NULL) + 
-  ylab(expression(paste("Lesion Volume [",mm^3, "]"))) +
+  ylab(expression(paste("IBA1+ Cells Volume [",mu,m^3, "]"))) +
   theme_mk + 
   remove_grid + 
   theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
 
-print(plot.list[["Barplot_MRI"]])
+print(plot.list[["Barplot_VolumeIba1"]])
+
+png_save_show(
+  plot = plot.list[["Barplot_VolumeIba1"]], 
+  file = file.path(ws, "Barplot_VolumeIba1.png"), 
+  dpi = 1000,
+  height = 90, 
+  width = 65
+)
+
 ```
-
-
-
 
 
 # Bulk validation of Apoe-Trem2 interaction
@@ -568,10 +577,10 @@ plot.list[["Bulk_barplot_deconvo"]] <- cibersort_summary %>%
   theme_mk +
   theme(legend.position = "bottom") + 
   expand_limits(x= c(1, 6)) +
-  annotate("text", x = 6, y = 95.25, label = expression(italic("P = 0.4437")), color = "#02818A", size = 2.45, hjust = 1) + 
-  annotate("text", x = 6, y = 84.65, label = expression(italic("P = 0.0009")), color = "#A50F15", size = 2.45, hjust = 1) + 
-  annotate("text", x = 6, y = 59.5, label = expression(italic("P = 0.0004")), color = "#307faf", size = 2.45, hjust = 1) + 
-  annotate("text", x = 6, y = 37.85, label = expression(italic("P = 0.6699")), color = "#8C96C6", size = 2.45, hjust = 1)
+  annotate("text", x = 6, y = 95.25, label = expression(italic("P = 0.4437")), color = "#02818A", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 6, y = 84.65, label = expression(italic("P = 0.0009")), color = "#A50F15", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 6, y = 59.5, label = expression(italic("P = 0.0004")), color = "#307faf", size = 2.45, hjust = 1.5) + 
+  annotate("text", x = 6, y = 37.85, label = expression(italic("P = 0.6699")), color = "#8C96C6", size = 2.45, hjust = 1.5)
 
 print(plot.list[["Bulk_barplot_deconvo"]])
 
@@ -579,8 +588,8 @@ png_save_show(
   plot = plot.list[["Bulk_barplot_deconvo"]], 
   file = file.path(ws, "Bulk_barplot_deconvo.png"), 
   dpi = 1000,
-  height = 70, 
-  width = 70
+  height = 100, 
+  width = 100
 )
 ```
 
@@ -594,13 +603,13 @@ plot.list[["Scatter_bulk_vs_spatial_deconvo"]] <- merged_data %>%
   coord_cartesian(xlim = c(0, 70), ylim = c(0, 70)) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey80") + 
   scale_color_manual(values = col.list$zeng.cols, 
-                     guide = guide_legend(nrow = 3)) + 
+                     guide = guide_legend(nrow = 5)) + 
   scale_shape_manual(values = c("Ctrl" = 3, "1DPI" = 18, "3DPI" = 17, "7DPI" = 15), 
                      guide = guide_legend(nrow = 2)) + 
   scale_x_continuous(trans = "log1p", breaks = c(seq(0, 15, by = 5), seq(20, 80, by = 10))) +
   scale_y_continuous(trans = "log1p", breaks = c(seq(0, 15, by = 5), seq(20, 80, by = 10))) +
   theme_mk + 
-  theme(legend.position = "none")
+  theme(legend.position = "bottom")
 
 print(plot.list[["Scatter_bulk_vs_spatial_deconvo"]])
 
@@ -608,8 +617,8 @@ png_save_show(
   plot = plot.list[["Scatter_bulk_vs_spatial_deconvo"]], 
   file = file.path(ws, "Scatter_bulk_vs_spatial_deconvo.png"), 
   dpi = 1000,
-  height = 100, 
-  width = 100
+  height = 150, 
+  width = 150
 )
 ```
 
@@ -641,7 +650,7 @@ png_save_show(
 
 Processes found downstream of Apoe-Trems, shown in bulk
 ```{r downstream apoe trem processes shown in bulk}
-plot.list[["Bulk_apoe_trem_processes"]] <- 
+plot.list[["Bulk_apoe_trem_processes"]] <-
   bulk_processes_long %>% 
   ggplot(aes(x = time, y = value, fill = condition, group = SampleName)) +
   geom_bar(stat = "identity", position = position_dodge(width = 0.5), width = 0.5) +
@@ -660,23 +669,28 @@ plot.list[["Bulk_apoe_trem_processes"]] <-
                "GO_Tissue.remodeling1" = "Tissue Remodeling"
              ))) +  # Facet by process, with each process in a single row
   labs(x = NULL, y = "Normalized Score", fill = NULL) +
+  theme_mk + 
   theme(
-    text = element_text(size = 14),
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    strip.text.y = element_text(angle = 0),
-    legend.position = "bottom"
+    axis.text.x = element_text(hjust = 0.5),
+    legend.position = "bottom", 
+    strip.background = element_blank(), 
+    strip.text.y.left = element_text(angle = 0, hjust = 1), 
+    strip.placement = "outside"
   ) +
   scale_fill_manual(
     values = c("FCI_Control" = "#525475", "FCI_Sham" = "#5F4C62", "FCI_MCAO" = "#D18080"), 
     guide = guide_legend(nrow = 1)) +
-  scale_y_continuous(breaks = c(0,1)) + 
-  ggtitle(label = "Bulk Transcriptomics: Apoe-Trem2 Downstream Processes") + 
-  theme_mk + 
+  scale_x_discrete(
+    labels = c(
+      "Ctrl" = "Ctrl", 
+      "24h" = "1DPI", 
+      "3d" = "3DPI", 
+      "7d" = "7DPI"
+    )) + 
+  scale_y_continuous(
+    breaks = c(0,1)) + 
+  ggtitle(label = "Bulk Transcriptomics: ApoE-Trem2 Downstream Processes") + 
   remove_grid + 
-  theme(legend.position = "bottom", 
-        strip.background = element_blank(), 
-        strip.text.y.left = element_text(angle = 0, hjust = 1), 
-        strip.placement = "outside") + 
   geom_text(data = bulk_processes_stat_results, aes(x = 4.5, y = 0.5, label = significance), hjust = 0.5, vjust = 0.5, size = 2.45, inherit.aes = FALSE)
 
 print(plot.list[["Bulk_apoe_trem_processes"]])
@@ -685,7 +699,7 @@ png_save_show(
   plot = plot.list[["Bulk_apoe_trem_processes"]], 
   file = file.path(ws, "Bulk_apoe_trem_processes.png"), 
   dpi = 1000,
-  height = 100, 
+  height = 110, 
   width = 120
 )
 ```

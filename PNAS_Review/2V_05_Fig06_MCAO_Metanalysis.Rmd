@@ -237,36 +237,8 @@ png_save_show(
 
 ```
 
-apoe-trem2 presence
-```{r apoe trem2}
-compute_coexpression <- \(dataset, ligand, receptor, pair_name){
-  # compute expression value of LR pair (the minimum of the two)
-  mtx <- dataset %>% 
-    GetAssayData(assay = "Spatial", layer = "data") %>% 
-    .[c(ligand, receptor), ] %>% 
-    t %>% 
-    as.data.frame() %>% 
-    rownames_to_column(var = "Barcodes") %>% 
-    dplyr::rename(
-      exp_ligand = .data[[ligand]], 
-      exp_receptor = .data[[receptor]]) %>% 
-    rowwise() %>% 
-    mutate(!!pair_name := case_when(
-      exp_ligand == 0 | exp_receptor == 0 ~ 0, 
-      TRUE ~ min(c(exp_ligand, exp_receptor))
-    )) %>% 
-    ungroup()
-  
-  # add to spatial.seurat data
-  dataset@meta.data %<>% rownames_to_column(var = "Barcodes")
-  dataset@meta.data %<>% right_join(y = mtx, by = "Barcodes")
-  dataset@meta.data %<>% 
-    mutate(barcode = Barcodes) %>% 
-    column_to_rownames(var = "Barcodes")
-  dataset@meta.data[[pair_name]] %>% summary %>% print
-  
-  return(dataset)
-}
+apoe-trem2 coexpression
+```{r apoe trem2 coexpression}
 
 # Han2024
 han.spatial %<>% 

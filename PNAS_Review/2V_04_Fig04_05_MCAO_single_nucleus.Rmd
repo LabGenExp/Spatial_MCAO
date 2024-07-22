@@ -513,7 +513,7 @@ Immunovalidation Aldh1l1 + Gfap
 ```{r immuno astro}
 immuno <- 
   read_all_sheets(
-    file = file.path("results", "PNAS", "MCAO_IHC_Validations.xlsx")
+    file = file.path("results", "PNAS", "Tables", "MCAO_IHC_Validations.xlsx")
     ) %>% 
   .[["Aldh1l1_Gfap"]] %>% 
   mutate(Proportion_Colocalized = Proportion_Colocalized * 100) %>% 
@@ -532,6 +532,16 @@ immuno_summary <-
     mean_colocalization = mean(mean_colocalization)
   )
 
+# stat test control vs injured
+stat_test <- 
+  immuno %>% 
+  mutate(Injured =  if_else(Condition == "Ctrl", "NoMCAO", "MCAO")) %>% 
+  wilcox.test(mean_colocalization ~ Injured, data = .)
+print(stat_test)
+
+
+
+
 # plot
 seurat.plots[["Barplot_Immuno_Astro"]] <- 
   ggplot(
@@ -544,6 +554,7 @@ seurat.plots[["Barplot_Immuno_Astro"]] <-
     aes(ymin = mean_colocalization - sd_colocalization, 
         ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
+  annotate(geom = "text", x = 1, y = 40, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
   ylim(-1, 60) +
   xlab(NULL) + 
   ylab("ALDH1L1 + GFAP co-localization (%)") +
@@ -559,7 +570,7 @@ png_save_show(
   show_plot = FALSE, 
   dpi = 1000, 
   height = 90, 
-  width = 70
+  width = 65
 )
 
 ```
@@ -995,7 +1006,7 @@ Immunovalidation Iba1 + Ctsb
 ```{r immuno microglia}
 immuno <- 
   read_all_sheets(
-    file = file.path("results", "PNAS", "MCAO_IHC_Validations.xlsx")
+    file = file.path("results", "PNAS", "Tables", "MCAO_IHC_Validations.xlsx")
     ) %>% 
   .[["Iba1_Ctsb"]] %>% 
   mutate(Proportion_Colocalized = Proportion_Colocalized * 100) %>% 
@@ -1021,6 +1032,14 @@ immuno_summary <-
     mean_colocalization = mean(mean_colocalization)
   )
 
+# stat test control vs injured
+stat_test <- 
+  immuno %>% 
+  mutate(Injured =  if_else(Condition == "Ctrl", "NoMCAO", "MCAO")) %>% 
+  wilcox.test(mean_colocalization ~ Injured, data = .)
+print(stat_test)
+
+
 # plot
 seurat.plots[["Barplot_Immuno_Microglia"]] <- 
   ggplot(
@@ -1033,6 +1052,7 @@ seurat.plots[["Barplot_Immuno_Microglia"]] <-
     aes(ymin = mean_colocalization - sd_colocalization, 
         ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
+  annotate(geom = "text", x = 1, y = 20, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
   ylim(0, 35) +
   xlab(NULL) + 
   ylab("IBA1 + CSTB co-localization (%)") +
@@ -1048,7 +1068,7 @@ png_save_show(
   show_plot = FALSE, 
   dpi = 1000, 
   height = 90, 
-  width = 70
+  width = 65
 )
 
 ```
@@ -1771,9 +1791,6 @@ saveRDS(merged.seurat, file = "data/Seurat_OLs_integrated_annotated.Rds")
 ### sctransformed-centered analysis
 
 ```{r scsn seurat load}
-if(!dir.exists("results/SpatialFigures/Figure4/oligodendrocytes")){dir.create("results/SpatialFigures/Figure4/oligodendrocytes"); ws <- "results/SpatialFigures/Figure4/oligodendrocytes"}else{ws <- "results/SpatialFigures/Figure4/oligodendrocytes"}
-
-
 oligoint.seurat <- readRDS("data/seurat_OLIGO_integrated_UMAP_named.rds")
 oligoint.seurat %<>% SetIdent(value = "scsnOLAnno")
 oligoint.seurat@active.ident %>% levels
@@ -1864,25 +1881,80 @@ Mito and ribo content continued.
 ```{r ribo mito}
 oligoint.seurat[[]] %>% names ## percent.mt and percent.rib are calculated
 
-oligoint.seurat %>% FeaturePlot(features = "percent.mt", pt.size = 0.25, max.cutoff = 'q99', cols = brewer.pal(n = 9, name = "Blues")[3:9]) %>% 
-  ggsave(filename = file.path(ws, "FeaturePlot_scsn_oligo_percentMT.tiff"), device = 'tiff', dpi = 300, width = 10, height = 10, units = 'cm')
+# mitochondrial content
+oligoint.seurat %>% FeaturePlot(
+  features = "percent.mt",
+  pt.size = 0.25,
+  max.cutoff = 'q99',
+  cols = brewer.pal(n = 9, name = "Blues")[3:9]
+)
 
-(oligoint.seurat %>% 
-    VlnPlot(features = "percent.mt", group.by = "scsnOLAnno", pt.size = 0, cols = col.list[["ol_cols"]]) + 
-    coord_flip() + NoLegend() + xlab("") + ylab("") + 
-    theme(axis.text = element_text(family = "OpenSans", size = 20))) %>% 
-  ggsave(filename = file.path(ws, "VlnPlot_scsn_oligo_percentMT.tiff"), device = 'tiff', dpi = 300, width = 7, height = 10, units = 'cm')
+seurat.plots[["VlnPlot_intOLs_MT"]] <-
+  oligoint.seurat %>%
+  enh_vlnplot(
+    feature = "percent.mt",
+    grouping = "scsnOLAnno",
+    colors = col.list[["intOLSubtypes"]],
+    compare_means = F
+  ) +
+  theme_mk +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  remove_grid +
+  NoLegend() +
+  ylab("Mitochondrial RNA content (%)") +
+  ggtitle(NULL)
+
+print(seurat.plots[["VlnPlot_intOLs_MT"]])
+
+seurat.plots[["VlnPlot_intOLs_MT"]] %>% 
+  png_save_show(
+    file = file.path(ws, "VlnPlot_intOLs_MT.png"), 
+    show_plot = F, 
+    width = 90, 
+    height = 90
+    )
 
 
-oligoint.seurat %>% FeaturePlot(features = "percent.rib", pt.size = 0.25, max.cutoff = 'q99', cols = brewer.pal(n = 9, name = "Blues")[3:9]) %>% 
-  ggsave(filename = file.path(ws, "FeaturePlot_scsn_oligo_percentRIB.tiff"), device = 'tiff', dpi = 300, width = 10, height = 10, units = 'cm')
+# ribosomal content
+oligoint.seurat %>% FeaturePlot(
+  features = "percent.rib",
+  pt.size = 0.25,
+  max.cutoff = 'q99',
+  cols = brewer.pal(n = 9, name = "Blues")[3:9]
+) %>%
+  ggsave(
+    filename = file.path(ws, "FeaturePlot_scsn_oligo_percentRIB.tiff"),
+    device = 'tiff',
+    dpi = 300,
+    width = 10,
+    height = 10,
+    units = 'cm'
+  )
 
-(oligoint.seurat %>% 
-    VlnPlot(features = "percent.rib", group.by = "scsnOLAnno", pt.size = 0, cols = col.list[["ol_cols"]]) + 
-    coord_flip() + NoLegend() + xlab("") + ylab("") + 
-    theme(axis.text = element_text(family = "OpenSans", size = 20))) %>% 
-  ggsave(filename = file.path(ws, "VlnPlot_scsn_oligo_percentRIB.tiff"), device = 'tiff', dpi = 300, width = 7, height = 10, units = 'cm')
+seurat.plots[["VlnPlot_intOLs_RIB"]] <-
+  oligoint.seurat %>%
+  enh_vlnplot(
+    feature = "percent.rib",
+    grouping = "scsnOLAnno",
+    colors = col.list[["intOLSubtypes"]],
+    compare_means = F
+  ) +
+  theme_mk +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  remove_grid +
+  NoLegend() +
+  ylab("Ribosomal RNA content (%)") +
+  ggtitle(NULL)
 
+print(seurat.plots[["VlnPlot_intOLs_RIB"]])
+
+seurat.plots[["VlnPlot_intOLs_RIB"]] %>% 
+  png_save_show(
+    file = file.path(ws, "VlnPlot_intOLs_RIB.png"), 
+    show_plot = F, 
+    width = 90, 
+    height = 90
+    )
 ```
 
 Cluster proportions - conditions
@@ -1948,34 +2020,34 @@ write.xlsx(oligoint.markers.all, file = file.path(ws, "Markers_intSCSN_OLs.xlsx"
 
 
 ## Dotplot
-oligoint.seurat %>% FeaturePlot(features = "Rras2", pt.size = 1.5, label = T)
+oligoint.seurat %>% FeaturePlot(features = "Tnfrsf1a", pt.size = 1.5, label = T)
 oligoint.seurat$scsnOLAnno %>% levels
 feature <- 'Tnfrsf12a'; list('A' = oligoint.seurat %>% VlnPlot(features = feature),
                         'B' = oligoint.seurat %>% FeaturePlot(features = feature, pt.size = 1.2)) %>% gridExtra::grid.arrange(grobs = ., ncol = 2)
 
-features_test <- c('Plp1', 'Mag', 'Mog', 'Olig1', 'Apod', 'Apoe' ## OL lineage
+features_test <- c('Plp1', 'Mag', 'Mog', 'Olig1', 'Apod', 'Apoe', ## OL lineage
                    'Nckap5','Tcf7l2', 'Prom1',   # NFOL
                    'Sepp1', 'S100b', 'Hopx',  # MOL2
                    'Opalin', 'Ptgds',  # MOL5/6
                    'Cd9', 'C4b','Ifi27', 'H2-D1', 'B2m',  # MOL IFN
                    'Trf', 'Serpina3n', 'Klk6', # MOL DA1
-                   'Cd63', 'Eif1', 'Cct5', 'Ctsd', 'Ddit3', 'Cdkn1a',  'Tnfrsf12a'  # MOL DA2
+                   'Cd63', 'Eif1', 'Cct5', 'Ctsd', 'Ddit3', 'Cdkn1a',  'Tnfrsf12a', "Tnfrsf1a"  # MOL DA2
                    )
 
 p <-
   DotPlot(
-    seurat,
+    oligoint.seurat,
     assay = "RNA",
     features = features_test,
-    group.by = "intOLSubtypes",
+    group.by = "scsnOLAnno",
     cols = c("#FFF7FB", "#4D3D70")
   ) + 
   labs(x = NULL, y = NULL) +
   theme_mk +
   remove_grid + 
-  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust = 1), 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), 
         axis.ticks = element_blank())
-p
+print(p)
 
 png_save_show(
   plot = p, 
@@ -2234,6 +2306,214 @@ lapply(features, function(feature){
 
 ```
 
+Immunohistochemistry validation
+```{r immuno validation}
+# Serpina3n
+immuno <- 
+  read_all_sheets(
+    file = file.path("results", "PNAS", "Tables", "MCAO_IHC_Validations.xlsx")
+    ) %>% 
+  .[["Plp1_Serpina3n"]] %>% 
+  mutate(Proportion = Proportion * 100) %>% 
+  dplyr::mutate(Condition = factor(Condition, levels = sections)) %>% 
+  group_by(SampleName, Condition) %>% 
+  dplyr::summarise(
+    mean_colocalization = mean(Proportion), 
+    .groups = "drop"
+  )
+
+p.values <- 
+  pairwise.wilcox.test(
+    x = immuno$mean_colocalization, 
+    g = immuno$Condition, 
+    p.adjust.method = "BH", 
+    paired = F)
+
+immuno_summary <- 
+  immuno %>% 
+  group_by(Condition) %>% 
+  dplyr::summarise(
+    sd_colocalization = stats::sd(mean_colocalization),
+    mean_colocalization = mean(mean_colocalization)
+  )
+
+# stat test control vs injured
+stat_test <- 
+  immuno %>% 
+  mutate(Injured =  if_else(Condition == "Ctrl", "NoMCAO", "MCAO")) %>% 
+  wilcox.test(mean_colocalization ~ Injured, data = .)
+print(stat_test)
+
+
+# plot
+seurat.plots[["Barplot_Immuno_OL_Serpina"]] <- 
+  ggplot(
+    data = immuno, 
+    aes(y = mean_colocalization, x = Condition)
+    ) + 
+  geom_bar(data = immuno_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#4D3D70", size = 0.5) +
+  geom_errorbar(
+    data =  immuno_summary, 
+    aes(ymin = mean_colocalization, 
+        ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
+  geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
+  annotate(geom = "text", x = 1, y = 1, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  ylim(-0.1, 1.5) +
+  xlab(NULL) + 
+  ylab("Plp1 + SERPINA3N co-localization (%)") +
+  theme_mk + 
+  remove_grid + 
+  theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
+print(seurat.plots[["Barplot_Immuno_OL_Serpina"]])
+
+png_save_show(
+  plot = seurat.plots[["Barplot_Immuno_OL_Serpina"]], 
+  file = file.path(ws, "Barplot_Immuno_OL_Serpina.png"), 
+  show_plot = FALSE, 
+  dpi = 1000, 
+  height = 90, 
+  width = 70
+)
+
+# B2m
+immuno <- 
+  read_all_sheets(
+    file = file.path("results", "PNAS", "Tables", "MCAO_IHC_Validations.xlsx")
+    ) %>% 
+  .[["Plp1_B2m"]] %>% 
+  mutate(Proportion = Proportion * 100) %>% 
+  dplyr::mutate(Condition = factor(Condition, levels = sections)) %>% 
+  group_by(SampleName, Condition) %>% 
+  dplyr::summarise(
+    mean_colocalization = mean(Proportion), 
+    .groups = "drop"
+  )
+
+immuno_summary <- 
+  immuno %>% 
+  group_by(Condition) %>% 
+  dplyr::summarise(
+    sd_colocalization = stats::sd(mean_colocalization),
+    mean_colocalization = mean(mean_colocalization)
+  )
+
+# stat test
+## pairwise
+p.values <- 
+  pairwise.wilcox.test(
+    x = immuno$mean_colocalization, 
+    g = immuno$Condition, 
+    p.adjust.method = "BH", 
+    paired = F)
+p.values
+
+# control vs injured
+stat_test <- 
+  immuno %>% 
+  mutate(Injured =  if_else(Condition == "Ctrl", "NoMCAO", "MCAO")) %>% 
+  wilcox.test(mean_colocalization ~ Injured, data = .)
+print(stat_test)
+
+# plot
+seurat.plots[["Barplot_Immuno_OL_B2m"]] <- 
+  ggplot(
+    data = immuno, 
+    aes(y = mean_colocalization, x = Condition)
+    ) + 
+  geom_bar(data = immuno_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#A23C8A", size = 0.5) +
+  geom_errorbar(
+    data =  immuno_summary, 
+    aes(ymin = mean_colocalization, 
+        ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
+  geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
+  annotate(geom = "text", x = 1, y = 3, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  ylim(-0.1, 11) +
+  xlab(NULL) + 
+  ylab("Plp1 + B2M co-localization (%)") +
+  theme_mk + 
+  remove_grid + 
+  theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
+print(seurat.plots[["Barplot_Immuno_OL_B2m"]])
+
+png_save_show(
+  plot = seurat.plots[["Barplot_Immuno_OL_B2m"]], 
+  file = file.path(ws, "Barplot_Immuno_OL_B2m.png"), 
+  show_plot = FALSE, 
+  dpi = 1000, 
+  height = 90, 
+  width = 70
+)
+
+# Tnfrsf1a
+immuno <- 
+  read_all_sheets(
+    file = file.path("results", "PNAS", "Tables", "MCAO_IHC_Validations.xlsx")
+    ) %>%
+  .[["Plp1_Tnfrsf1a"]] %>% 
+  mutate(Proportion = Proportion * 100) %>% 
+  dplyr::mutate(Condition = factor(Condition, levels = sections)) %>% 
+  group_by(SampleName, Condition) %>% 
+  dplyr::summarise(
+    mean_colocalization = mean(Proportion), 
+    .groups = "drop"
+  )
+
+immuno_summary <- 
+  immuno %>% 
+  group_by(Condition) %>% 
+  dplyr::summarise(
+    sd_colocalization = stats::sd(mean_colocalization),
+    mean_colocalization = mean(mean_colocalization)
+  )
+
+# stat test
+## pairwise
+p.values <- 
+  pairwise.wilcox.test(
+    x = immuno$mean_colocalization, 
+    g = immuno$Condition, 
+    p.adjust.method = "BH", 
+    paired = F)
+p.values
+
+## control vs injured
+stat_test <- 
+  immuno %>% 
+  mutate(Injured =  if_else(Condition == "Ctrl", "NoMCAO", "MCAO")) %>% 
+  wilcox.test(mean_colocalization ~ Injured, data = .)
+print(stat_test)
+
+# plot
+seurat.plots[["Barplot_Immuno_OL_Tnfrsf1a"]] <- 
+  ggplot(
+    data = immuno, 
+    aes(y = mean_colocalization, x = Condition)
+    ) + 
+  geom_bar(data = immuno_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#211E61", size = 0.5) +
+  geom_errorbar(
+    data =  immuno_summary, 
+    aes(ymin = mean_colocalization, 
+        ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
+  geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
+  annotate(geom = "text", x = 1, y = 50, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  ylim(-1, 90) +
+  xlab(NULL) + 
+  ylab("Plp1 + TNFRSF1A co-localization (%)") +
+  theme_mk + 
+  remove_grid + 
+  theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
+print(seurat.plots[["Barplot_Immuno_OL_Tnfrsf1a"]])
+
+png_save_show(
+  plot = seurat.plots[["Barplot_Immuno_OL_Tnfrsf1a"]], 
+  file = file.path(ws, "Barplot_Immuno_OL_Tnfrsf1a.png"), 
+  show_plot = FALSE, 
+  dpi = 1000, 
+  height = 90, 
+  width = 70
+)
+
+```
 
 ### log-normalized-centered analysis
 read integrated annotated Seurat
@@ -2464,185 +2744,7 @@ oligo.plots[["Heatmaps_SelectedGOterms_FullPathways"]] <- lapply(unlist(oligo.re
 
 ```
 
-Immunohistochemistry validation
-```{r immuno validation}
-# Serpina3n
-immuno <- 
-  read_all_sheets(
-    file = file.path("results", "PNAS", "MCAO_IHC_Validations.xlsx")
-    ) %>% 
-  .[["Plp1_Serpina3n"]] %>% 
-  mutate(Proportion = Proportion * 100) %>% 
-  dplyr::mutate(Condition = factor(Condition, levels = sections)) %>% 
-  group_by(SampleName, Condition) %>% 
-  dplyr::summarise(
-    mean_colocalization = mean(Proportion), 
-    .groups = "drop"
-  )
 
-p.values <- 
-  pairwise.wilcox.test(
-    x = immuno$mean_colocalization, 
-    g = immuno$Condition, 
-    p.adjust.method = "BH", 
-    paired = F)
-
-immuno_summary <- 
-  immuno %>% 
-  group_by(Condition) %>% 
-  dplyr::summarise(
-    sd_colocalization = stats::sd(mean_colocalization),
-    mean_colocalization = mean(mean_colocalization)
-  )
-
-# plot
-seurat.plots[["Barplot_Immuno_OL_Serpina"]] <- 
-  ggplot(
-    data = immuno, 
-    aes(y = mean_colocalization, x = Condition)
-    ) + 
-  geom_bar(data = immuno_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#4D3D70", size = 0.5) +
-  geom_errorbar(
-    data =  immuno_summary, 
-    aes(ymin = mean_colocalization, 
-        ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
-  geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  ylim(-0.1, 1.5) +
-  xlab(NULL) + 
-  ylab("Plp1 + SERPINA3N co-localization (%)") +
-  theme_mk + 
-  remove_grid + 
-  theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
-print(seurat.plots[["Barplot_Immuno_OL_Serpina"]])
-
-png_save_show(
-  plot = seurat.plots[["Barplot_Immuno_OL_Serpina"]], 
-  file = file.path(ws, "Barplot_Immuno_OL_Serpina.png"), 
-  show_plot = FALSE, 
-  dpi = 1000, 
-  height = 90, 
-  width = 70
-)
-
-# B2m
-immuno <- 
-  read_all_sheets(
-    file = file.path("results", "PNAS", "MCAO_IHC_Validations.xlsx")
-    ) %>% 
-  .[["Plp1_B2m"]] %>% 
-  mutate(Proportion = Proportion * 100) %>% 
-  dplyr::mutate(Condition = factor(Condition, levels = sections)) %>% 
-  group_by(SampleName, Condition) %>% 
-  dplyr::summarise(
-    mean_colocalization = mean(Proportion), 
-    .groups = "drop"
-  )
-
-p.values <- 
-  pairwise.wilcox.test(
-    x = immuno$mean_colocalization, 
-    g = immuno$Condition, 
-    p.adjust.method = "BH", 
-    paired = F)
-p.values
-
-immuno_summary <- 
-  immuno %>% 
-  group_by(Condition) %>% 
-  dplyr::summarise(
-    sd_colocalization = stats::sd(mean_colocalization),
-    mean_colocalization = mean(mean_colocalization)
-  )
-
-# plot
-seurat.plots[["Barplot_Immuno_OL_B2m"]] <- 
-  ggplot(
-    data = immuno, 
-    aes(y = mean_colocalization, x = Condition)
-    ) + 
-  geom_bar(data = immuno_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#A23C8A", size = 0.5) +
-  geom_errorbar(
-    data =  immuno_summary, 
-    aes(ymin = mean_colocalization, 
-        ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
-  geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  ylim(-0.1, 11) +
-  xlab(NULL) + 
-  ylab("Plp1 + B2M co-localization (%)") +
-  theme_mk + 
-  remove_grid + 
-  theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
-print(seurat.plots[["Barplot_Immuno_OL_B2m"]])
-
-png_save_show(
-  plot = seurat.plots[["Barplot_Immuno_OL_B2m"]], 
-  file = file.path(ws, "Barplot_Immuno_OL_B2m.png"), 
-  show_plot = FALSE, 
-  dpi = 1000, 
-  height = 90, 
-  width = 70
-)
-
-# Tnfrsf1a
-immuno <- 
-  read_all_sheets(
-    file = file.path("results", "PNAS", "MCAO_IHC_Validations.xlsx")
-    ) %>%
-  .[["Plp1_Tnfrsf1a"]] %>% 
-  mutate(Proportion = Proportion * 100) %>% 
-  dplyr::mutate(Condition = factor(Condition, levels = sections)) %>% 
-  group_by(SampleName, Condition) %>% 
-  dplyr::summarise(
-    mean_colocalization = mean(Proportion), 
-    .groups = "drop"
-  )
-
-p.values <- 
-  pairwise.wilcox.test(
-    x = immuno$mean_colocalization, 
-    g = immuno$Condition, 
-    p.adjust.method = "BH", 
-    paired = F)
-p.values
-
-immuno_summary <- 
-  immuno %>% 
-  group_by(Condition) %>% 
-  dplyr::summarise(
-    sd_colocalization = stats::sd(mean_colocalization),
-    mean_colocalization = mean(mean_colocalization)
-  )
-
-# plot
-seurat.plots[["Barplot_Immuno_OL_Tnfrsf1a"]] <- 
-  ggplot(
-    data = immuno, 
-    aes(y = mean_colocalization, x = Condition)
-    ) + 
-  geom_bar(data = immuno_summary, stat = "identity", width = 0.6, colour = "black", alpha = 0.75, fill = "#211E61", size = 0.5) +
-  geom_errorbar(
-    data =  immuno_summary, 
-    aes(ymin = mean_colocalization, 
-        ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
-  geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  ylim(-1, 90) +
-  xlab(NULL) + 
-  ylab("Plp1 + TNFRSF1A co-localization (%)") +
-  theme_mk + 
-  remove_grid + 
-  theme(panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey"))
-print(seurat.plots[["Barplot_Immuno_OL_Tnfrsf1a"]])
-
-png_save_show(
-  plot = seurat.plots[["Barplot_Immuno_OL_Tnfrsf1a"]], 
-  file = file.path(ws, "Barplot_Immuno_OL_Tnfrsf1a.png"), 
-  show_plot = FALSE, 
-  dpi = 1000, 
-  height = 90, 
-  width = 70
-)
-
-```
 
 
 

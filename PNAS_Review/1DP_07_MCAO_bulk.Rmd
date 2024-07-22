@@ -1005,15 +1005,32 @@ for(i in seq_along(downstream_go_list)){
     name = set_name)
 }
 
+# extract dds as data frame
 dds_colnames <- colData(dds) %>% colnames %>% tail(length(downstream_go_list))
 dds_colnames
 
-# create long dataframe for easier ggplotting
-bulk_processes_long <- dds %>% 
-  colData() %>% 
-  as.data.frame(row.names = rownames(.)) %>% 
-  rownames_to_column(var = "SampleName") %>% 
+dds_to_df <- dds %>%
+  colData() %>%
+  as.data.frame(row.names = rownames(.)) %>%
+  rownames_to_column(var = "SampleName")
+dds_to_df_colnames <- colnames(dds_to_df)
+
+# normalize the GO module score by Apoe-Trem2 coexpression and turn into a long format
+bulk_processes_long <- dds_to_df %>%
+  left_join(vst_counts, by = "SampleName", keep = FALSE) %>%
+  rowwise %>% 
+  mutate(Apoe_Trem2_coexp = case_when(
+    Apoe == 0 | Trem2 == 0 ~ 0,
+    TRUE ~ min(c(Apoe, Trem2)))) %>% 
+  ungroup() %>% 
+  mutate(Apoe_Trem2_coexp = min_max_normalize(Apoe_Trem2_coexp)) %>% 
+  mutate(across(starts_with("GO_"), 
+                ~ . * Apoe_Trem2_coexp)) %>% 
+  select(-ends_with(".y")) %>%  # Remove duplicate columns y df
+  rename_with(~ gsub(".x$", "", .), ends_with(".x")) %>%  # Remove suffix from x columns
+  select(dds_to_df_colnames, Apoe_Trem2_coexp) %>% 
   pivot_longer(cols = all_of(dds_colnames), names_to = "process", values_to = "value")
+  
 
 # reorder the samplenames Ctrl -> Sham -> MCAO
 custom_order <- function(x) {
@@ -1033,9 +1050,24 @@ unique_sample_names <-
   arrange(order, SampleName) %>% 
   pull(SampleName)
 
-bulk_processes_long %<>% 
-  mutate(SampleName = factor(SampleName, levels = unique_sample_names), 
-         time = time)
+bulk_processes_long %<>%
+  mutate(
+    SampleName = factor(SampleName, levels = unique_sample_names),
+    time = time,
+    process = factor(
+      process,
+      levels = c(
+        "GO_Proteasome.complex1",
+        "GO_Neuron.apoptotic.process1",
+        "GO_Erk1.and.erk2.cascade1",
+        "GO_Positive.regulation.of.cytokine.production1",
+        "GO_Chemotaxis1",
+        "GO_Gliogenesis1",
+        "GO_Tissue.remodeling1",
+        "GO_Glucose.metabolic.process1"
+      )
+    )
+  )
 
 # statistical testing of the significance
 bulk_processes_stat_results <- bulk_processes_long %>% 
@@ -1065,6 +1097,3 @@ save bulk results for Fig 3
 save(cibersort_summary, error_bars, highlighted_celltypes, custom_colors, vst_counts, apoe_trem_long, bulk_processes_long, bulk_processes_stat_results, merged_data, 
      file = file.path("data", "BulkResults_1DP_07.Rdata"))
 ```
-
-
-

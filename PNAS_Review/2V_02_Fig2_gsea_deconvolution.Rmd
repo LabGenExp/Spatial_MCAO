@@ -101,17 +101,17 @@ plot.list[["SpatialPlots_GOsummaries"]] <-
     limits <- c(min(spatial.seurat@meta.data[[x]]),
                 max(spatial.seurat@meta.data[[x]]))
     
-    # unify the color scheme such that middle value is 0
-    color_values <- c(
-      limits[1],
-      limits[1] + (limits[2] - limits[1]) * 1 / 6,
-      limits[1] + (limits[2] - limits[1]) * 2 / 6,
-      0,
-      # Midpoint corresponding to 0
-      limits[1] + (limits[2] - limits[1]) * 4 / 6,
-      limits[1] + (limits[2] - limits[1]) * 5 / 6,
-      limits[2]
-    )
+    # # unify the color scheme such that middle value is 0
+    # color_values <- c(
+    #   limits[1],
+    #   limits[1] + (limits[2] - limits[1]) * 1 / 6,
+    #   limits[1] + (limits[2] - limits[1]) * 2 / 6,
+    #   0,
+    #   # Midpoint corresponding to 0
+    #   limits[1] + (limits[2] - limits[1]) * 4 / 6,
+    #   limits[1] + (limits[2] - limits[1]) * 5 / 6,
+    #   limits[2]
+    # )
     
     #Plot the spatial data
     plot <- spatial.seurat %>% SpatialPlot(
@@ -132,13 +132,14 @@ plot.list[["SpatialPlots_GOsummaries"]] <-
             panel.border = element_blank()) &
       scale_fill_gradientn(
         colours = col.list$gradient_blue_yellow_red,
-        values = scales::rescale(color_values, from = limits)
+        limits = limits
       ) &
-      scale_alpha_continuous(range = c(0.8, 1)) &
+      scale_alpha_continuous(range = c(0.5, 1)) &
       labs(title = NULL, subtitle = x)
     
     return(plot)
   })
+
 names(plot.list[["SpatialPlots_GOsummaries"]]) <- features
 print(plot.list[["SpatialPlots_GOsummaries"]][["7DPI_Gliogenesis53"]])
 
@@ -146,7 +147,8 @@ png_save_show(
   plot = plot.list[["SpatialPlots_GOsummaries"]][["7DPI_Gliogenesis53"]], 
   file = file.path(ws, "Spatial_GO_Gliogenesis.png"), 
   dpi = 1000,
-  height = 70
+  height = 70, 
+  width = 100
 )
 
 ```
@@ -285,12 +287,12 @@ mean_table <- df %>%
   
   plot.list[["StackedBarPlot_RCTD_ROIcomposition"]] <- (ann_plot / main_plot) + plot_layout(heights = c(1,10))
 
-  Display the plot
+  # Display the plot
   print(plot.list[["StackedBarPlot_RCTD_ROIcomposition"]])
   png_save_show(plot = plot.list[["StackedBarPlot_RCTD_ROIcomposition"]],
               file = file.path(ws, "StackedBarPlot_RCTD_ROIcomposition.png"),
               dpi = 1000,
-              height = 100,
+              height = 120,
               width = 150)
 }
 ```
@@ -387,10 +389,13 @@ Expression of selected chemokines
 ```{r chemokine expression}
 chemokines <- c("Ccl12", "Ccl3", "Ccl4")
 
+spatial.seurat %<>% AddModuleScore(features = list(chemokines), name = "chemokines")
+
+feature <- "chemokines1"
 plot.list[["Spatial_Chemokines"]] <- 
 spatial.seurat %>%
-  SpatialPlot(features = chemokines,
-              images = section, 
+  SpatialPlot(features = feature,
+              images = sections, 
               image.alpha = 0, 
               stroke = 0, 
               pt.size.factor = 2.2,
@@ -402,8 +407,10 @@ spatial.seurat %>%
   theme(legend.position = "none",
         panel.border = element_blank()) &
   scale_alpha_continuous(range = c(0.8, 1)) &
+  labs(title = NULL, subtitle = NULL) & 
   scale_fill_gradientn(
-    colours = col.list$gradient_grey_to_red
+    colours = col.list$gradient_grey_to_red, 
+    limits = c(min(spatial.seurat@meta.data[[feature]]), max(spatial.seurat@meta.data[[feature]]))
   )
 
 print(plot.list[["Spatial_Chemokines"]])
@@ -412,8 +419,8 @@ png_save_show(
   plot = plot.list[["Spatial_Chemokines"]], 
   file = file.path(ws, "Spatial_Chemokines.png"), 
   dpi = 1000,
-  height = 150,
-  width = 150
+  height = 70,
+  width = 100
 )
 
 ```
@@ -474,8 +481,8 @@ png_save_show(
   plot = plot.list[["RankPlot_Genes_vs_Microglia_3DPI"]], 
   file = file.path(ws, "RankPlot_correlation_genes_microglia_3DPI.png"), 
   show_plot = FALSE, 
-  width = 60, 
-  height = 100
+  width = 110, 
+  height = 60
 )
 ```
 
@@ -532,8 +539,8 @@ png_save_show(
   plot = plot.list[["RankPlot_Genes_vs_Astrocytes_7DPI"]], 
   file = file.path(ws, "RankPlot_correlation_genes_astrocytes_7DPI.png"), 
   show_plot = FALSE, 
-  width = 60, 
-  height = 100
+  width = 110, 
+  height = 60
 )
 
 ```
@@ -591,8 +598,8 @@ png_save_show(
   plot = plot.list[["RankPlot_Genes_vs_OLs_7DPI"]], 
   file = file.path(ws, "RankPlot_correlation_genes_oligodendrocytes_7DPI.png"), 
   show_plot = FALSE, 
-  width = 60, 
-  height = 100
+  width = 110, 
+  height = 60
 )
 
 ```
@@ -663,7 +670,7 @@ print(plot.list[["VlnPlot_COI_in_ROI"]])
 
 Each cell population spatially
 ```{r SpatialPlot of RCTD}
-temp <- lapply(coi, ## RCTD results
+temp <- lapply("RCTD_Microglia", ## RCTD results
                \(celltype_level) {
                  celltype <- celltype_level %>% str_remove(pattern = "^RCTD_")
                  plot <- spatial.seurat %>% SpatialFeaturePlot(
@@ -681,12 +688,13 @@ temp <- lapply(coi, ## RCTD results
                    remove_grid &
                    NoAxes() & 
                    NoLegend() &
-                   theme(legend.position = "none", 
+                   theme(legend.position = "right", 
                          panel.border = element_blank()) & 
                    scale_alpha_continuous(range = c(0.2, 1)) &
                    viridis::scale_fill_viridis(option = 'rocket',
                                                direction = -1,
-                                               limits = c(0, 1)) &
+                                               limits = c(0, 1), 
+                                               breaks = c(0, 0.5, 1)) &
                    labs(title = NULL)
                  
                  plot <-
@@ -709,3 +717,28 @@ for(plot in names(plot.list)){
   dev.off()
 }
 ```
+
+# wrap plot
+
+```{r }
+plot.list[["wrap_gliogenesis_chemokines_microglia"]] <- 
+  patchwork::wrap_plots(
+    list(
+      plot.list[["SpatialPlots_GOsummaries"]][["7DPI_Gliogenesis53"]], 
+      temp[["SpatialPlot_Microglia"]], 
+      plot.list[["Spatial_Chemokines"]]),
+    ncol = 1
+  )
+
+png_save_show(
+  plot = plot.list[["wrap_gliogenesis_chemokines_microglia"]],
+  file = file.path(ws, "wrap_gliogenesis_chemokines_microglia.png"),
+  dpi = 1000,
+  height = 150,
+  width = 200
+)
+
+
+
+```
+

@@ -313,22 +313,33 @@ md <- spatial.seurat@meta.data %>%
 t.test(nFeature_Spatial ~ BrainAreas, data = md)
 
 # plot
-main_plot <- spatial.seurat %>% enh_vlnplot(
-  feature = "nFeature_Spatial",
-  grouping = "DetailedRegionAnnoShort",
-  colors = col.list$cols_mono_short,
-  compare_means = F,
-  idents = ctx_regions
-) +
+main_plot <-
+  spatial.seurat %>%
+  enh_vlnplot(
+    feature = "nFeature_Spatial",
+    grouping = "DetailedRegionAnnoShort",
+    colors = col.list$cols_mono_short,
+    compare_means = F,
+    idents = ctx_regions
+  ) +
   theme_mk +
   remove_grid +
   NoLegend() +
   ggtitle(NULL) +
   ylab("Gene Count") +
   theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
     panel.grid.major.y = element_line(linewidth = 0.1, colour = "grey")
-    ) + 
-  annotate("text", x = 6, y = 9000, label = expression("P < 2 x 10"^-16), vjust = 0, hjust = 0, size = 2.45) # add t.test statistic
+  ) +
+  annotate(
+    "text",
+    x = 5,
+    y = 9000,
+    label = expression("P < 2 x 10" ^ -16),
+    vjust = 0,
+    hjust = 0.5,
+    size = 2.45
+  ) # add t.test statistic
 
 # add explanatory variables above
 ann_plot <- md %>% ggplot(aes(DetailedRegionAnnoShort, nFeature_Spatial)) +
@@ -342,11 +353,12 @@ ann_plot <- md %>% ggplot(aes(DetailedRegionAnnoShort, nFeature_Spatial)) +
 
 plot.list[["VlnPlot_nFeature"]] <- (ann_plot / main_plot) + plot_layout(heights = c(1,10))
 print(plot.list[["VlnPlot_nFeature"]])
+
 png_save_show(plot = plot.list[["VlnPlot_nFeature"]], 
               file = file.path(ws, "VlnPlot_nFeature.png"), 
               dpi = 1000, 
-              height = 70, 
-              width = 100)
+              height = 100, 
+              width = 90)
 
 rm(main_plot, md, ann_plot)
 ```
@@ -400,14 +412,14 @@ plot.list[["UpSet_SpatialMarkers_up"]] <-
   UpSetR::upset(
     fromList(temp[ctx_regions]),
     sets = ctx_regions %>% rev, 
-    nintersects = 40,
+    nintersects = 25,
     sets.bar.color = col.list[["cols_mono_short"]][ctx_regions] %>% rev,
     order.by = "freq",
     keep.order = T,
     show.numbers = "yes",
     mb.ratio = c(0.3, 0.7),
-    sets.x.label = "Number of markers",
-    mainbar.y.label = "Size of marker overlap",
+    sets.x.label = "Number of DEGs",
+    mainbar.y.label = "Marker overlap",
     scale.intersections = "identity", 
   )
 
@@ -436,8 +448,8 @@ plot.list[["UpSet_SpatialMarkers_down"]] <-
     keep.order = T,
     show.numbers = "yes",
     mb.ratio = c(0.5, 0.5),
-    sets.x.label = "Number of markers",
-    mainbar.y.label = "Size of marker overlap",
+    sets.x.label = "Number of DEGs",
+    mainbar.y.label = "Marker overlap",
     scale.intersections = "identity"
   )
 print(plot.list[["UpSet_SpatialMarkers_down"]])
