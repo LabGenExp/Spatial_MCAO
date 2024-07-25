@@ -554,7 +554,7 @@ seurat.plots[["Barplot_Immuno_Astro"]] <-
     aes(ymin = mean_colocalization - sd_colocalization, 
         ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  annotate(geom = "text", x = 1, y = 40, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  annotate(geom = "text", x = 1, y = 40, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0, size = 2.45) +
   ylim(-1, 60) +
   xlab(NULL) + 
   ylab("ALDH1L1 + GFAP co-localization (%)") +
@@ -569,8 +569,8 @@ png_save_show(
   file = file.path(ws, "BarPlot_astrocytes_Immuno.png"), 
   show_plot = FALSE, 
   dpi = 1000, 
-  height = 90, 
-  width = 65
+  height = 70, 
+  width = 50
 )
 
 ```
@@ -1052,7 +1052,7 @@ seurat.plots[["Barplot_Immuno_Microglia"]] <-
     aes(ymin = mean_colocalization - sd_colocalization, 
         ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  annotate(geom = "text", x = 1, y = 20, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  annotate(geom = "text", x = 1, y = 20, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0, size = 2.45) +
   ylim(0, 35) +
   xlab(NULL) + 
   ylab("IBA1 + CSTB co-localization (%)") +
@@ -1067,8 +1067,8 @@ png_save_show(
   file = file.path(ws, "BarPlot_microglia_Immuno.png"), 
   show_plot = FALSE, 
   dpi = 1000, 
-  height = 90, 
-  width = 65
+  height = 70, 
+  width = 50
 )
 
 ```
@@ -2357,7 +2357,7 @@ seurat.plots[["Barplot_Immuno_OL_Serpina"]] <-
     aes(ymin = mean_colocalization, 
         ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  annotate(geom = "text", x = 1, y = 1, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  annotate(geom = "text", x = 1, y = 1, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0, size = 2.45) +
   ylim(-0.1, 1.5) +
   xlab(NULL) + 
   ylab("Plp1 + SERPINA3N co-localization (%)") +
@@ -2371,8 +2371,8 @@ png_save_show(
   file = file.path(ws, "Barplot_Immuno_OL_Serpina.png"), 
   show_plot = FALSE, 
   dpi = 1000, 
-  height = 90, 
-  width = 70
+  height = 70, 
+  width = 50
 )
 
 # B2m
@@ -2426,7 +2426,7 @@ seurat.plots[["Barplot_Immuno_OL_B2m"]] <-
     aes(ymin = mean_colocalization, 
         ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  annotate(geom = "text", x = 1, y = 3, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  annotate(geom = "text", x = 1, y = 6, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0, size = 2.45) +
   ylim(-0.1, 11) +
   xlab(NULL) + 
   ylab("Plp1 + B2M co-localization (%)") +
@@ -2440,8 +2440,8 @@ png_save_show(
   file = file.path(ws, "Barplot_Immuno_OL_B2m.png"), 
   show_plot = FALSE, 
   dpi = 1000, 
-  height = 90, 
-  width = 70
+  height = 70, 
+  width = 50
 )
 
 # Tnfrsf1a
@@ -2495,7 +2495,7 @@ seurat.plots[["Barplot_Immuno_OL_Tnfrsf1a"]] <-
     aes(ymin = mean_colocalization, 
         ymax = mean_colocalization + sd_colocalization), width = 0.1, color = "black", size = 0.5) +
   geom_jitter(position = position_jitter(0.2), color = 'black', size= 1.5, shape = 1, stroke = 0.5) + 
-  annotate(geom = "text", x = 1, y = 50, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0.5, size = 2.45) +
+  annotate(geom = "text", x = 1, y = 50, label = paste0("P = ", stat_test$p.value %>% round(3)), vjust = -0.5, hjust = 0, size = 2.45) +
   ylim(-1, 90) +
   xlab(NULL) + 
   ylab("Plp1 + TNFRSF1A co-localization (%)") +
@@ -2509,8 +2509,8 @@ png_save_show(
   file = file.path(ws, "Barplot_Immuno_OL_Tnfrsf1a.png"), 
   show_plot = FALSE, 
   dpi = 1000, 
-  height = 90, 
-  width = 70
+  height = 70, 
+  width = 50
 )
 
 ```

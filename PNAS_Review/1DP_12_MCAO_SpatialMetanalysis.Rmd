@@ -1,0 +1,2066 @@
+---
+title: "1DP_12_MCAO_SpatialMetanalysis"
+author: "DanielZucha"
+date: "2024-05-01"
+output: html_document
+---
+
+Hello, 
+
+In this markdown we will reanalyse published datasets:
+- [Han et al 2024](https://www.science.org/doi/10.1126/scitranslmed.adg1323) that used 10X Visium to study 3DPI of multiple coronal sections after induced stroke with the phototrombotic stroke model.
+- [Scott et al 2024](https://www.nature.com/articles/s41467-024-45821-y) that focused on astrocytes in cortical ischemic stroke in 2-10-21DPI.
+
+```{r libraries}
+library(Seurat)
+library(SeuratWrappers)
+library(tidyverse)
+library(magrittr)
+library(patchwork)
+source("code/supporting_functions_MCAO.R")
+
+## options
+tidyverse_priority()
+options(Seurat.object.assay.version = "v5")
+options(future.globals.maxSize = 1e9)
+```
+
+# Han et al 2024
+```{r path and lists}
+# ws
+if(!dir.exists("ws/MetanalysisHan2024")){dir.create("ws/MetanalysisHan2024")
+  ws <- "ws/MetanalysisHan2024"}else{ws <- "ws/MetanalysisHan2024"}
+
+# lists for saving
+plot.list <- list()
+result.list <- list()
+```
+
+Create Seurat Object
+```{r separate seurat objects for each section}
+# identify sections
+sections <- list.dirs(path = "data/Metadata/Han2024", 
+                      recursive = F, 
+                      full.names = F) # list the names of sections
+
+# individual seurat for each section
+seurat.list <- lapply(sections, \(section){
+  
+  data.path <- file.path("data", "Metadata", "Han2024") # path to project data
+  final.path <- file.path(data.path, section) # path to section data
+  
+  # create spatial seurat object
+  seurat <- Seurat::Load10X_Spatial(
+    data.dir = final.path, 
+    filename = file.path("2.3.h5_files", "filtered_feature_bc_matrix.h5"), 
+    assay = "Spatial", 
+    slice = section, 
+    filter.matrix = F
+    )
+  
+  no.spots <- dim(seurat)[2] # the number of spots
+  
+  # add metadata
+  require(stringr)
+  if(section %>% str_detect(pattern = "^PT")){
+    md <- data.frame(
+      "Condition" = rep("3DPI", length.out = no.spots), 
+      "Injury" = rep("PT", length.out = no.spots), 
+      "SectionName" = rep(section, length.out = no.spots)
+      )
+  } else {
+    md <- data.frame(
+      "Condition" = rep("Sham", length.out = no.spots), 
+      "Injury" = rep("Sham", length.out = no.spots), 
+      "SectionName" = rep(section, length.out = no.spots)
+      )
+    }
+  
+  seurat %<>% AddMetaData(metadata = md)
+  
+  message(section, " was processed.")
+  return(seurat)
+}); names(seurat.list) <- sections
+```
+
+```{r Flip images if necessary}
+# PT1-1
+seurat.list[["PT1-1"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "PT1.1")
+
+seurat.list[["PT1-1"]] %<>% 
+  rotateSeuratImage(
+    slide = "PT1.1", 
+    rotation = "Hf"
+  ) %>% 
+  rotateSeuratImage(
+    slide = "PT1.1", 
+    rotation = "R90"
+  )
+
+# PT1-2
+seurat.list[["PT1-2"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "PT1.2")
+
+seurat.list[["PT1-2"]] %<>% 
+  rotateSeuratImage(
+    slide = "PT1.2", 
+    rotation = "Hf"
+  )
+
+# PT1-3
+seurat.list[["PT1-3"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "PT1.3")
+
+seurat.list[["PT1-3"]] %<>% 
+  rotateSeuratImage(
+    slide = "PT1.3", 
+    rotation = "L90"
+  ) %>% 
+  rotateSeuratImage(
+    slide = "PT1.3", 
+    rotation = "Hf"
+  )
+
+# PT1-4
+seurat.list[["PT1-4"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "PT1.4")
+
+seurat.list[["PT1-4"]] %<>% 
+  rotateSeuratImage(
+    slide = "PT1.4", 
+    rotation = "Hf"
+  )
+
+# Sham1-1
+seurat.list[["Sham1-1"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "Sham1.1")
+
+seurat.list[["Sham1-1"]] %<>%
+  rotateSeuratImage(slide = "Sham1.1",
+                    rotation = "180")
+
+# Sham1-2
+seurat.list[["Sham1-2"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "Sham1.2")
+
+seurat.list[["Sham1-2"]] %<>%
+  rotateSeuratImage(slide = "Sham1.2",
+                    rotation = "180") %>% 
+  rotateSeuratImage(slide = "Sham1.2",
+                    rotation = "Hf")
+
+# Sham1-3
+seurat.list[["Sham1-3"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "Sham1.3")
+
+seurat.list[["Sham1-3"]] %<>%
+  rotateSeuratImage(slide = "Sham1.3",
+                    rotation = "180") %>% 
+  rotateSeuratImage(slide = "Sham1.3",
+                    rotation = "Hf")
+
+# Sham1-4
+seurat.list[["Sham1-4"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "Sham1.4")
+
+seurat.list[["Sham1-4"]] %<>%
+  rotateSeuratImage(slide = "Sham1.4",
+                    rotation = "180") %>% 
+  rotateSeuratImage(slide = "Sham1.4",
+                    rotation = "Hf")
+
+```
+
+```{r combine into one spatial seurat}
+# merge into one large seurat
+spatial.seurat <- merge(x = seurat.list[[1]], 
+                        y = seurat.list[2:length(seurat.list)], 
+                        add.cell.ids = names(seurat.list), 
+                        project = "Han2024")
+
+# metadata as factors
+spatial.seurat@meta.data %<>% mutate(
+  Condition = factor(Condition, levels = c("Sham", "3DPI")), 
+  Injury = factor(Injury, levels = c("Sham", "PT")), 
+  SectionName = factor(SectionName, levels = sections)
+)
+
+# percent MT and RIB
+spatial.seurat %<>% PercentageFeatureSet(pattern = "^mt-", col.name = "percent.mt")
+spatial.seurat %<>% PercentageFeatureSet(pattern = "^Rpl|Rps", col.name = "percent.rib")
+```
+
+```{r save the spatial Han 2024 seurat}
+# save the seurat
+saveRDS(spatial.seurat, file = file.path("data", "Metadata", "spatialseurat_Han2024.rds"))
+
+rm(seurat.list)
+gc()
+```
+
+## Processing Seurat Object
+Processing the spatial seurat object includes a QC check to keep spots with sufficient features / count numbers, followed by filtering, lognormalization, pca, umap, clustering and brain region annotation.
+
+load seurat
+```{r load seurat}
+spatial.seurat <- readRDS(file = file.path("data", "Metadata", "spatialseurat_Han2024.rds"))
+```
+
+Check QC
+```{r QC}
+# QC plot summary
+spatial_QC <- function(seu = spatial.seurat, groupings = "Condition"){
+  plots <- list()
+  
+  if(groupings %in% names(col.list)){
+    cols <- col.list[[groupings]]
+  } else {
+    cols <- col.list$Retro_TenDiscreet
+  }
+  
+  # Feature Scatters
+  plots[["Scatter_Count_Feature"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "nFeature_Spatial", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("RNA vs Gene content")
+  
+  plots[["Scatter_Count_percentMT"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "percent.mt", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("total RNA vs mtRNA content")
+  
+  plots[["Scatter_Count_percentRIB"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "percent.rib", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("total RNA vs ribRNA content")
+  
+  plots[["Scatter_Feature_percentMT"]] <- (seu %>% FeatureScatter(
+    feature1 = "nFeature_Spatial", 
+    feature2 = "percent.mt", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("Gene count vs mtRNA content")
+  
+  # VlnPlot
+  plots[["Vln_Count_Feature_MT_RIB"]] <- (VlnPlot(
+    object = seu, 
+    features = c("nCount_Spatial", "nFeature_Spatial", "percent.mt", "percent.rib"), 
+    group.by = groupings, 
+    ncol = 1, 
+    combine = T, 
+    pt.size = 0, 
+    cols = cols)) & 
+    geom_boxplot(width=0.1, fill="white", outlier.size = 0.2) & # add boxplot inside the violins
+    xlab(NULL) &
+    ylab(NULL)
+  
+  # Spatial
+  plots[["Spatial_Count"]] <- (SpatialPlot(
+    object = seu, 
+    features = "nCount_Spatial", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = 8, 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_grey_to_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  plots[["Spatial_Feature"]] <- (SpatialPlot(
+    object = seu, 
+    features = "nFeature_Spatial", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = 8, 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_grey_to_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  plots[["Spatial_percentMT"]] <- (SpatialPlot(
+    object = seu, 
+    features = "percent.mt", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = 8, 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+    plots[["Spatial_percentRIB"]] <- (SpatialPlot(
+      object = seu, 
+      features = "percent.rib", 
+      crop = F, 
+      alpha = 1, 
+      image.alpha = 0, 
+      pt.size.factor = 1.5, 
+      stroke = 0, 
+      ncol = 8, 
+      combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  wrapped_plots <- patchwork::wrap_plots(
+    plots, 
+    byrow = T, 
+    ncol = 4, 
+    nrow = 5, 
+    design = "ABCD
+              EFFF
+              EGGG
+              EHHH
+              EIII"
+  ) & theme_mk & NoLegend() 
+  
+  wrapped_plots <- wrapped_plots + 
+    plot_annotation(
+      title = "QC before filtering", 
+      subtitle = "Han2024") ## unify the plotting scheme
+  
+  return(wrapped_plots)
+}
+
+{
+  plot.list[["QC_before_filtering"]] <- spatial_QC(
+    seu = spatial.seurat, 
+    groupings = "SectionName")
+  
+  print(plot.list[["QC_before_filtering"]])
+  
+  plot.list[["QC_before_filtering"]] %>% ggsave_tiff(
+    plotname = "QCplots_Han2024_prefiltering", ws_location = ws, height = 35, width = 35)
+}
+
+spatial.seurat$nCount_Spatial %>% summary
+spatial.seurat$nFeature_Spatial %>% summary
+```
+
+Filter
+```{r filter}
+spatial.seurat <- AddMetaData(
+  spatial.seurat, 
+  metadata = ifelse(
+    spatial.seurat@meta.data$nFeature_Spatial < 100 | spatial.seurat@meta.data$nCount_Spatial < 100, 
+    "LowFeature", 
+    "Normal"), 
+  col.name = "Highlight_Spots")
+
+spatial.seurat$Highlight_Spots %>% table ## only one spot with ultra low coverage
+
+spatial.seurat %>% SpatialPlot(
+  group.by = "Highlight_Spots", 
+  crop = F, 
+  image.alpha = 0, 
+  alpha = 1, 
+  ncol = 4) & NoLegend()
+
+# Filter
+{
+  spatial.seurat %<>% subset(nCount_Spatial > 100)
+  spatial.seurat %<>% subset(nFeature_Spatial > 100)
+  }
+```
+
+Normalization
+```{r lognormalization}
+{
+  # log normalization
+  spatial.seurat %<>% NormalizeData(normalization.method = "LogNormalize", verbose = T)
+  spatial.seurat %<>% ScaleData()
+  
+  # variable feature selection
+  spatial.seurat %<>% FindVariableFeatures(assay = "Spatial", nfeatures = 3000, verbose = T)
+  spatial.seurat %>% VariableFeaturePlot(assay = "Spatial")
+  
+  # Set default assay
+  DefaultAssay(spatial.seurat) <- "Spatial"
+}
+```
+
+PCA
+```{r pca}
+## PCA on the top variable features
+spatial.seurat %<>% RunPCA(assay = "Spatial", npcs = 50, verbose = T)
+spatial.seurat %>% PCAPlot(group.by = "SectionName", cols = col.list$Retro_TenDiscreet, raster = F, shuffle = T)
+```
+
+Select No. PCs
+```{r PCA QC}
+spatial.seurat %>% PC_var_explained()
+spatial.seurat %>% ElbowPlot(ndims = 50)
+spatial.seurat %>% DimHeatmap(dims = 1:15, cells = 700, balanced = TRUE)
+spatial.seurat %>% DimHeatmap(dims = 16:30, cells = 700, balanced = TRUE)
+
+nDims <- 20 # define the number of PCs to use
+spatial.seurat %<>% RunPCA(npcs = nDims, verbose = T)
+```
+
+UMAP
+```{r Run UMAP}
+{
+  spatial.seurat %<>% RunUMAP(
+    dims = 1:nDims, 
+    reduction = "pca",  
+    reduction.name = "umap_unintegrated",
+    verbose = T)
+  
+  spatial.seurat %>% DimPlot(
+    group.by = 'SectionName', 
+    reduction = "umap_unintegrated", 
+    cols = col.list$Retro_TenDiscreet, 
+    raster = F, 
+    combine = T, 
+    shuffle = T, 
+    label = T, 
+    label.box = T) + 
+    NoLegend() + 
+    NoAxes()
+}
+
+{
+  # Clustering analysis
+  spatial.seurat %<>% FindNeighbors(reduction = "pca", dims = 1:nDims)
+  spatial.seurat %<>% FindClusters(resolution = 1, cluster.name = "unintegrated_clusters")
+  
+  plot.list[["UMAP_noInt"]] <- spatial.seurat %>% DimPlot(
+    reduction = "umap_unintegrated", 
+    group.by = "seurat_clusters", 
+    split.by = 'Condition', 
+    raster = F, 
+    label = T, 
+    label.size = 3, 
+    shuffle = T) + NoLegend() + NoAxes()
+  
+  plot.list[["SpatialPlot_noInt"]] <- spatial.seurat %>% SpatialPlot(
+    group.by = "seurat_clusters", 
+    image.alpha = 0,
+    alpha = 1,
+    crop = F,
+    pt.size.factor = 1.5,
+    stroke = 0,
+    ncol = 4,
+    combine = T,
+    label = T, 
+    label.size = 2
+  ) & NoLegend()
+  
+  wrap_plots(plot.list[c("UMAP_noInt", "SpatialPlot_noInt")],
+             ncol = 5, 
+             nrow = 2, 
+             byrow = T, 
+             design = "AABBB
+                       AABBB")
+}
+```
+
+```{r Join Layers}
+spatial.seurat %<>% JoinLayers()
+```
+
+Annotate Brain regions
+```{r annotate brain regions}
+spatial.seurat@active.ident %>% levels
+{
+  # Presence of canonical markers in seurat_clusters
+  ## load brain regions from in-house brain regions
+  brain.region.markers <- read_all_sheets(
+    file = file.path("data", "SupplementaryTable1_ControlSection_Markers_plusABA.xlsx")) %>% 
+    .[-length(.)] %>% # remove last list that includes comments rather than genes
+    lapply(\(x){x %>% pull(gene) %>% head(10)}) # pull top 10 markers per region
+  
+  ## scores for brain region markers
+  spatial.seurat %<>% AddModuleScore(
+    features = brain.region.markers, 
+    name = names(brain.region.markers))
+  
+  ## per cluster module values
+  plot.list[["VlnPlot_RegionCanonicalMarkers"]] <- spatial.seurat %>% VlnPlot(
+    features = spatial.seurat@meta.data %>% colnames %>% tail(n = length(brain.region.markers)),
+    pt.size = 0, 
+    group.by = "seurat_clusters", 
+    ncol = 3
+    )
+  
+  print(plot.list[["VlnPlot_RegionCanonicalMarkers"]])
+}
+
+{
+  select_cluster <- 12
+  highlight.spots <- Cells(spatial.seurat)[spatial.seurat@meta.data$seurat_clusters %in% select_cluster]
+  
+  spatial.seurat %>% SpatialPlot(
+    cells.highlight = highlight.spots, 
+    cols.highlight = c("red", "grey"), 
+    image.alpha = 0.1, 
+    alpha = 0.8, 
+    stroke = 0, 
+    crop = F, 
+    ncol = 4) & NoLegend()
+}
+
+# annotate clusters
+spatial.seurat@meta.data %<>% mutate("BrainRegion" = factor(case_when(
+  seurat_clusters == 0 ~ "IsocortexL5-6", 
+  seurat_clusters == 1 ~ "AmygdalarNuclei", 
+  seurat_clusters == 2 ~ "Thalamus", 
+  seurat_clusters == 3 ~ "Caudoputamen", 
+  seurat_clusters == 4 ~ "IsocortexL1-4",
+  seurat_clusters == 5 ~ "Caudoputamen", 
+  seurat_clusters == 6 ~ "IsocortexL5-6", 
+  seurat_clusters == 7 ~ "IsocortexL1-4",
+  seurat_clusters == 8 ~ "FiberTracts", 
+  seurat_clusters == 9 ~ "Caudoputamen", 
+  seurat_clusters == 10 ~ "PiriformArea", 
+  seurat_clusters == 11 ~ "GLS", 
+  seurat_clusters == 12 ~ "LesionCore", 
+  seurat_clusters == 13 ~ "Hypothalamus", 
+  seurat_clusters == 14 ~ "Hippocampus", 
+  seurat_clusters == 15 ~ "LesionPeriphery", 
+  seurat_clusters == 16 ~ "AmygdalarNuclei", 
+  seurat_clusters == 17 ~ "AmygdalarNuclei", 
+  seurat_clusters == 18 ~ "CorticalSubplate", 
+  seurat_clusters == 19 ~ "CorpusCallosum", 
+  seurat_clusters == 20 ~ "Ventricle", 
+  seurat_clusters == 21 ~ "FiberTracts", 
+  seurat_clusters == 22 ~ "Ventricle"
+)))
+
+spatial.seurat@meta.data %<>% mutate("BrainRegionShort" = factor(case_when(
+  seurat_clusters == 0 ~ "CTX5-6", 
+  seurat_clusters == 1 ~ "AMY", 
+  seurat_clusters == 2 ~ "TH", 
+  seurat_clusters == 3 ~ "CP", 
+  seurat_clusters == 4 ~ "CTX1-4",
+  seurat_clusters == 5 ~ "CP", 
+  seurat_clusters == 6 ~ "CTX5-6", 
+  seurat_clusters == 7 ~ "CTX1-4",
+  seurat_clusters == 8 ~ "FT", 
+  seurat_clusters == 9 ~ "CP", 
+  seurat_clusters == 10 ~ "PIR", 
+  seurat_clusters == 11 ~ "GLS", 
+  seurat_clusters == 12 ~ "ISD3c", 
+  seurat_clusters == 13 ~ "HY", 
+  seurat_clusters == 14 ~ "HIP", 
+  seurat_clusters == 15 ~ "ISD3p", 
+  seurat_clusters == 16 ~ "AMY", 
+  seurat_clusters == 17 ~ "AMY", 
+  seurat_clusters == 18 ~ "CS", 
+  seurat_clusters == 19 ~ "FT", 
+  seurat_clusters == 20 ~ "V", 
+  seurat_clusters == 21 ~ "FT", 
+  seurat_clusters == 22 ~ "V"
+)))
+
+# set annotated regions as default ident
+Idents(spatial.seurat) <- "BrainRegionShort"
+
+# Simplified brain areas
+spatial.seurat@meta.data$BrainRegionShort %>% levels()
+spatial.seurat@meta.data %<>% 
+  mutate(BrainArea = factor(case_when(
+    BrainRegionShort == "AMY" ~ "Telencephalon", 
+    BrainRegionShort == "CP" ~ "Telencephalon", 
+    BrainRegionShort == "CS" ~ "Telencephalon", 
+    BrainRegionShort == "CTX1-4" ~ "Cortex", 
+    BrainRegionShort == "CTX5-6" ~ "Cortex", 
+    BrainRegionShort == "FT" ~ "Telencephalon", 
+    BrainRegionShort == "GLS" ~ "Cortex", 
+    BrainRegionShort == "HIP" ~ "Telencephalon", 
+    BrainRegionShort == "HY" ~ "Diencephalon", 
+    BrainRegionShort == "ISD3c" ~ "LesionCore", 
+    BrainRegionShort == "ISD3p" ~ "LesionPeriphery", 
+    BrainRegionShort == "PIR" ~ "Telencephalon", 
+    BrainRegionShort == "TH" ~ "Diencephalon", 
+    BrainRegionShort == "V" ~ "Telencephalon" 
+  ), levels = c("Diencephalon", "Telencephalon", "Cortex", "LesionCore", "LesionPeriphery")))
+```
+
+```{r plot annotated regions}
+
+plot.list[["UMAP_BrainRegionShort"]] <- spatial.seurat %>% DimPlot(
+  reduction = "umap_unintegrated",
+  group.by = "BrainRegionShort", 
+  split.by = "Condition",
+  cols = col.list$cols_mono_short_v2, 
+  shuffle = T, 
+  pt.size = 1.5, 
+  label = T
+  ) & 
+  NoLegend() & NoAxes() & ggtitle(NULL)
+
+
+plot.list[["SpatialPlot_BrainRegionShort"]] <- spatial.seurat %>% SpatialPlot(
+  group.by = "BrainRegionShort", 
+  cols = col.list$cols_mono_short_v2,
+  image.alpha = 0, 
+  stroke = 0, 
+  ncol = 4, 
+  crop = F) & 
+  NoLegend()
+
+plot.list[["WrapPlot_Annotated"]] <- patchwork::wrap_plots(
+  plot.list[c("UMAP_BrainRegionShort", "SpatialPlot_BrainRegionShort")], 
+  ncol = 5, 
+  nrow = 2, 
+  design = "AABBB
+            AABBB"
+  ) + plot_annotation(title = "Re-analysis of Han et al 2024", 
+                  subtitle = "Brain region clustering")
+
+print(plot.list[["WrapPlot_Annotated"]])
+
+# save the output plots
+# plot.list[["WrapPlot_Annotated"]] %>% ggsave_tiff(
+#   ws_location = ws, plotname = "WrapPlot_UMAP_Spatial_BrainRegions_annotated", 
+#   height = 15, 
+#   width = 30)
+```
+
+save annotated spatial seurat
+```{r save annotated Han2024}
+saveRDS(object = spatial.seurat,
+        file = file.path("data", "Metadata", "spatialseurat_Han2024_annotated.rds"))
+```
+
+## Ref-based deconvolution: RCTD using Zeng 2023 ref
+Next, we will use the annotated reference dataset for a deconvolution of Han 2024 publicly available spatial data.
+
+load datasets
+```{r load libraries and datasets}
+library(spacexr)
+
+# spatial Han 2024
+spatial.seurat <- readRDS(file = file.path("data", "Metadata", "spatialseurat_Han2024_annotated.rds"))
+
+# single-cell ref Zeng 2023
+seurat <- readRDS(file = "data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds")
+```
+
+Single-cell reference object prep
+```{r Reference}
+# counts and metadata information
+counts <- seurat[["RNA"]]$counts
+meta_data <- data.frame("Barcodes" = Cells(seurat),
+                        "Cluster" = seurat$CellTypeClass, # annotated celltypes
+                        "nUMI" = colSums(counts))
+cell_types <- meta_data$Cluster %>% as.factor(); names(cell_types) <- meta_data$Barcodes # assign barcode names to the individual reference cells
+nUMI <- meta_data$nUMI; names(nUMI) <- meta_data$Barcodes # create named nUMI list
+
+### Create the Reference object
+reference <- Reference(counts, cell_types, nUMI, min_UMI = 300)
+
+## (optional) Examine reference object
+print(dim(reference@counts)) #observe Gene Expression matrix
+table(reference@cell_types) #number of occurences for each cell type
+```
+
+Spatial object prep
+```{r Spatial data prep}
+spatial.seurat@meta.data %>% glimpse
+spatial.seurat@meta.data$SectionName %>% table
+
+# SpatialPlot for a visual reminder
+spatial.seurat %>% SpatialPlot(
+  group.by = "BrainRegionShort", 
+  cols = col.list$cols_mono_short_v2,
+  image.alpha = 0, 
+  stroke = 0, 
+  ncol = 4, 
+  crop = F) & 
+  NoLegend()
+
+# add an 'Image' metadata column with values matching names(spatial.seurat@images) for easier handling
+spatial.seurat@meta.data %<>% mutate("Image" = factor(case_when(
+  spatial.seurat$SectionName == "PT1-1" ~ "PT1.1", 
+  spatial.seurat$SectionName == "PT1-2" ~ "PT1.2", 
+  spatial.seurat$SectionName == "PT1-3" ~ "PT1.3", 
+  spatial.seurat$SectionName == "PT1-4" ~ "PT1.4", 
+  spatial.seurat$SectionName == "Sham1-1" ~ "Sham1.1", 
+  spatial.seurat$SectionName == "Sham1-2" ~ "Sham1.2", 
+  spatial.seurat$SectionName == "Sham1-3" ~ "Sham1.3", 
+  spatial.seurat$SectionName == "Sham1-4" ~ "Sham1.4"
+)))
+
+# individual sections are provided separately
+sections <- spatial.seurat@images %>% names
+print(sections)
+
+{
+  # initialize data lists
+  counts <- list()
+  coords <- list()
+  nUMI.spatial <- list()
+  
+  # add data to the lists
+  for(i in sections){
+    # define the section-related variable
+    variable <- "Image"
+    
+    barcodes <- Cells(spatial.seurat)[spatial.seurat@meta.data[[variable]] %in% i]
+    
+    # section counts
+    counts[[i]] <- spatial.seurat[["Spatial"]]@layers$counts[, spatial.seurat@meta.data[[variable]] %in% i]
+    rownames(counts[[i]]) <- rownames(spatial.seurat)
+    colnames(counts[[i]]) <- barcodes
+    
+    # section coordinates
+    coords[[i]] <- data.frame(
+      "xcoord" = spatial.seurat@images[[i]]@coordinates$imagecol, 
+      "ycoord" = spatial.seurat@images[[i]]@coordinates$imagerow)
+    rownames(coords[[i]]) <- barcodes
+    
+    # total UMIs per spot
+    nUMI.spatial[[i]] <- colSums(counts[[i]])
+  }
+}
+```
+
+```{r SpatialRNA objects}
+puck <- list(); for(i in sections){
+  puck[[i]] <- SpatialRNA(coords[[i]], counts[[i]], nUMI.spatial[[i]])
+}
+
+# clean-up when puck is ready
+rm(nUMI.spatial, nUMI, counts, coords, barcodes, variable, i, meta_data)
+gc()
+```
+
+Run RCTD deconvolution
+```{r RCTD object and deconvo}
+# prepare RCTD object
+puck %>% glimpse # individual spatialRNA objects inside puck list
+sections ## names for the replicates to be analyzed
+
+# RCTD objects containing spatial and ref sc data
+myRCTD.list <- list()
+for(replicate in sections){
+  myRCTD.list[[replicate]] <- create.RCTD(
+    spatialRNA = puck[[replicate]], 
+    reference = reference, 
+    max_cores = 32)
+  }
+
+# define cell type levels
+celltypes_levels <- reference@cell_types %>% levels
+gc()
+
+# Run RCTD
+for(i in sections){
+  myRCTD.list[[i]] <- run.RCTD(
+    myRCTD.list[[i]], 
+    doublet_mode = "full")
+  }  ## deconvo itself; mode = "full" as we expect multiple cell types present in each spot.
+
+# save the output
+save(myRCTD.list, sections, celltypes_levels, 
+     file = file.path("data", "Metadata", "RCTDlist_spatialHan2024_scRefZeng2023_fullmode.Rdata"))
+saveRDS(myRCTD.list, file = file.path("data", "Metadata", "RCTDlist_spatialHan2024_scRefZeng2023_fullmode.Rds"))
+```
+
+Add RCTD results to the spatial object
+```{r add RCTD to spatial}
+if(myRCTD.list[[1]]@config$RCTDmode == "multi"){ # processing multi-mode results
+  message("RCTD ran in multi mode.")
+  subweight.list <- list()
+  for(i in names(myRCTD.list)){
+    len <- myRCTD.list[[i]]@results %>% length
+    subweight.list[[i]] <- lapply(1:len, \(ii){
+      myRCTD.list[[i]]@results[[ii]][["sub_weights"]]
+      })
+    names(subweight.list[[i]]) <- myRCTD.list[[i]]@spatialRNA@coords %>% rownames()
+  }; subweight.list <- purrr::flatten(subweight.list) # barcode-named list of doubles with deconvo proportions
+  
+  temp <- lapply(celltypes_levels, \(x){
+    var <- which(sapply(subweight.list, \(y){x %in% names(y)})) # which spots include given cell type
+    barcodes <- sapply(subweight.list[var], \(z){vals <- z[x]}) # barcode of the spot with cell type, extract celltype's value from that spot
+    names(barcodes) <- names(barcodes) %>% stringr::str_remove(pattern = paste(".", x, sep = "")) # remove the '.celltypename' from barcode names
+    notbarcodes <-  Cells(spatial.seurat)[!(Cells(spatial.seurat) %in% names(barcodes))] # barcodes for spots that do not contain given cell type
+    zeros <- rep(0, length(notbarcodes)); names(zeros) <- notbarcodes # zero vector of notbarcodes length
+    fullbarcodes <- c(barcodes, zeros) 
+    return(fullbarcodes)  
+  }); names(temp) <- celltypes_levels
+  
+  for(name in names(temp)){ # add the proportions to the spatial.seurat file
+    spatial.seurat %<>% AddMetaData(temp[[name]], col.name = paste0("RCTD_Celltypes_", name)) # add deconvoluted values as metadata to the seurat object
+  }
+  
+  rm(name, i, len)
+  
+} else if(myRCTD.list[[1]]@config$RCTDmode == "full"){
+  message("RCTD ran in full mode.")
+  result.list[["full_weightlist"]] <- lapply(myRCTD.list, \(i){
+    norm_weights <- i@results$weights %>% normalize_weights() %>% as.data.frame()
+    return(norm_weights)
+  }) %>% bind_rows()
+  
+  # reorder the weightlist by spatial seurat barcodes
+  result.list[["full_weightlist"]] %<>% slice(match(rownames(result.list[["full_weightlist"]]), spatial.seurat %>% Cells))
+  rctd_colnames <- paste0("RCTD_", colnames(result.list[["full_weightlist"]]))
+  spatial.seurat %<>% AddMetaData(
+    metadata = result.list[["full_weightlist"]], 
+    col.name = rctd_colnames
+    )
+  
+  # created missing values replace by zero
+  spatial.seurat@meta.data[rctd_colnames][is.na(spatial.seurat@meta.data[rctd_colnames])] <- 0
+} else {
+  message("RCTD ran in doublet mode. Processing code is missing.")
+}
+```
+
+Rename sections based on time and bregma location
+```{r rename images based on time and bregma location}
+spatial.seurat@images %>% names
+names(spatial.seurat@images) <- c("3DPI_Bregma_0.4", "3DPI_Bregma_-0.8", "3DPI_Bregma_-2.0", "3DPI_Bregma_-3.2", 
+                               "Sham_Bregma_0.4", "Sham_Bregma_-0.8", "Sham_Bregma_-2.0", "Sham_Bregma_-3.2")
+
+sections <- c("3DPI_Bregma_0.4", "3DPI_Bregma_-0.8", "3DPI_Bregma_-2.0", "3DPI_Bregma_-3.2", 
+                               "Sham_Bregma_0.4", "Sham_Bregma_-0.8", "Sham_Bregma_-2.0", "Sham_Bregma_-3.2")
+
+spatial.seurat@meta.data %<>% 
+  mutate(
+    Bregma_SectionName = factor(case_when(
+      SectionName == "PT1-1" ~ "3DPI_Bregma_0.4", 
+      SectionName == "PT1-2" ~ "3DPI_Bregma_-0.8", 
+      SectionName == "PT1-3" ~ "3DPI_Bregma_-2.0", 
+      SectionName == "PT1-4" ~ "3DPI_Bregma_-3.2", 
+      SectionName == "Sham1-1" ~ "Sham_Bregma_0.4", 
+      SectionName == "Sham1-2" ~ "Sham_Bregma_-0.8", 
+      SectionName == "Sham1-3" ~ "Sham_Bregma_-2.0", 
+      SectionName == "Sham1-4" ~ "Sham_Bregma_-3.2"
+    ))
+  )
+
+```
+
+```{r RCTD SpatialPlot}
+# Spatial plots, rocket color gradient for all
+temp <- lapply(paste0(celltypes_levels), ## RCTD results
+               \(celltype_level) {
+                 celltype <- paste0("RCTD_", celltype_level)
+                 plot <- spatial.seurat %>% SpatialFeaturePlot(
+                   features = celltype,
+                   images = sections,
+                   crop = F,
+                   ncol = 4,
+                   pt.size.factor = 1.5,
+                   stroke = 0,
+                   alpha = 1,
+                   image.alpha = 0,
+                   combine = T
+                 ) &
+                   theme(legend.position = "none") &
+                   viridis::scale_fill_viridis(option = 'rocket',
+                                               direction = -1,
+                                               limits = c(0, 1)) &
+                   labs(title = NULL)
+                 
+                 plot <-
+                   plot + plot_annotation(title = NULL, subtitle = celltype_level)
+               })
+names(temp) <- paste0("SpatialPlot_", celltypes_levels)
+plot.list %<>% append(values = temp)
+
+print(plot.list$SpatialPlot_OLs)
+```
+
+save spatial with RCTD data
+```{r save spatial after deconvo}
+saveRDS(spatial.seurat, file = file.path("data", "Metadata",  "spatialseurat_Han2024_annotated_rctdZeng2023.rds"))
+```
+
+```{r RCTD Stacked barplot}
+# celltypes of interest
+coi <- spatial.seurat@meta.data %>% colnames %>% stringr::str_subset(pattern = "^RCTD_")
+
+# df of celltypes of interest (coi) in the regions of interest (roi)
+spatial.seurat@meta.data[["BrainRegionShort"]] %>% levels
+roi <- c("CTX1-4", "CTX5-6", "FT", "ISD3c", "ISD3p")
+df <- spatial.seurat@meta.data %>% filter(BrainRegionShort %in% roi) %>% select(BrainRegionShort, coi)
+
+# table of sum coi per roi
+mean_table <- df %>% 
+  group_by(BrainRegionShort) %>% 
+  summarize(across(starts_with("RCTD_"), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>% 
+  column_to_rownames(var = "BrainRegionShort") %>% 
+  "*"(100) %>% 
+  round(1) %>% 
+  rownames_to_column(var = "BrainRegionShort")
+
+
+# Stacked bar plot
+{
+  long_data <- mean_table %>% 
+    pivot_longer(
+      cols = starts_with("RCTD_"), 
+      names_to = "CellType", 
+      values_to = "MeanValue"
+    ) %>% mutate(CellType = stringr::str_remove(CellType, "RCTD_"))
+  
+  # Create the plot
+  plot.list[["StackedBarPlot_RCTD_ROIcomposition"]] <- ggplot(long_data, aes(x = BrainRegionShort, y = MeanValue, fill = CellType)) +
+    geom_bar(stat = "identity", alpha = 0.9, width = 0.75) + # Stacked bar plot
+    geom_text(aes(label = ifelse(MeanValue > 5, paste0(round(MeanValue, 1), "%"), "")), # display when >10%
+              position = position_stack(vjust = 0.5), 
+              size = 3, 
+              color = "white") +
+    scale_fill_manual(values = col.list$zeng.cols) +
+    labs(
+      x = NULL,
+      y = "Average Spot Composition",
+      fill = "Cell Type"
+    ) + 
+    theme_mk
+
+  # Display the plot
+  print(plot.list[["StackedBarPlot_RCTD_ROIcomposition"]])
+}
+```
+
+```{r RCTD Violin plot}
+# plotting the individual cell types 
+{
+  # choose celltypes of interest to plot
+  coi_to_plot <- c(
+      "RCTD_Neurons",
+      "RCTD_Astrocytes",
+      "RCTD_Microglia",
+      "RCTD_OLs",
+      "RCTD_OPCs",
+      "RCTD_PeripheralMyeloidCells"
+    )
+  
+  plot.list[["VlnPlot_COI_in_ROI"]] <- spatial.seurat %>% VlnPlot(
+    features = coi_to_plot,
+    group.by = "BrainRegion", 
+    split.by = "Condition", 
+    idents = roi, 
+    pt.size = 0, 
+    cols = col.list$Condition, 
+    combine = T,
+    ncol = 6
+  ) & geom_boxplot(
+    position=position_dodge(1), 
+    width = 0.1, 
+    outlier.size = 0.2) & 
+    theme_mk & 
+    remove_grid & 
+    xlab(NULL) & 
+    NoLegend()
+  
+  # change the plot names and keep just one legend
+  plot.list[["VlnPlot_COI_in_ROI"]] <- lapply(seq_along(plot.list[["VlnPlot_COI_in_ROI"]]), \(plot){
+    
+    # define the plot title
+    title <- coi_to_plot[plot] %>% stringr::str_remove(pattern = "^RCTD_")
+    if(title == "PeripheralMyeloidCells"){title <- "Peripheral Myeloid Cells"}
+    
+    # define the plot output
+    # the last plot will have the legend
+    if(plot == length(coi_to_plot)){
+      plot.list[["VlnPlot_COI_in_ROI"]][[plot]] <- plot.list[["VlnPlot_COI_in_ROI"]][[plot]] + 
+        ggtitle(title) + 
+        theme(legend.position = "right", 
+              legend.title = element_blank(), 
+              axis.text.x = element_text(angle = 45, 
+                                         hjust = 1, 
+                                         vjust = 1))
+    } else if(plot == 1) {
+      # the first plot will have the y axis label
+      plot.list[["VlnPlot_COI_in_ROI"]][[plot]] <- plot.list[["VlnPlot_COI_in_ROI"]][[plot]] +
+        ggtitle(title) + 
+        theme(axis.text.x = element_text(angle = 45, 
+                                         hjust = 1, 
+                                         vjust = 1)) + 
+        ylab("Per-spot proportion")
+    } else {
+      # for the rest, just change the title
+     plot.list[["VlnPlot_COI_in_ROI"]][[plot]] <- plot.list[["VlnPlot_COI_in_ROI"]][[plot]] +
+       ggtitle(title) + 
+       theme(axis.text.x = element_text(angle = 45, 
+                                        hjust = 1, 
+                                        vjust = 1))
+    }
+  })
+
+  plot.list[["VlnPlot_COI_in_ROI"]] %<>% wrap_plots(ncol = length(.))
+    
+  print(plot.list[["VlnPlot_COI_in_ROI"]])
+}
+```
+
+```{r Density plot}
+# neuronal loss
+{
+  temp <- spatial.seurat@meta.data %>% filter(
+  BrainRegionShort %in% c("CTX1-4", "CTX5-6", "ISD3c", "ISD3p")
+  ) %>% select(Condition, BrainRegionShort, RCTD_Neurons)
+
+  t.test(RCTD_Neurons ~ Condition, data = temp)
+  
+  plot.list[["DensityPlot_NeuronalContent"]] <- ggplot(temp, aes(.data[["RCTD_Neurons"]], fill = .data[["Condition"]])) + 
+    geom_density(alpha = 0.8, color = "white", linewidth = 0.5) +
+    scale_x_reverse() +
+    annotate(geom = "text", x = 0.17, y = 8, label = "P < 2e-16", hjust = 0, vjust = 0.5, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    annotate(geom = "text", x = 0.95, y = 9, label = "Intact cortex", hjust = 0, vjust = 0.5, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    annotate(geom = "text", x = 0.4, y = 9, label = "Lesioned cortex", hjust = 0, vjust = 0.5, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    geom_vline(xintercept = 0.75, color = "black", linetype = "dotted", linewidth = 0.5) +
+    scale_fill_manual(values = col.list$Condition) + 
+    theme_mk +
+    remove_grid +
+    theme(legend.position = c(0.85, 0.8)) +
+    labs(x = "Per-spot neuronal proportion", y = "Density", fill = NULL, title = "Neuronal content in the cortex")
+  print(plot.list[["DensityPlot_NeuronalContent"]])
+}
+
+# glial content
+{
+  temp <- temp <- spatial.seurat@meta.data %>% filter(
+  BrainRegionShort %in% c("CTX1-4", "CTX5-6", "ISD3c", "ISD3p")
+  ) %>% select(Condition, BrainRegionShort, RCTD_Microglia, RCTD_Astrocytes, RCTD_OLs, RCTD_OPCs) %>% 
+    mutate(Glia = RCTD_Microglia + RCTD_Astrocytes + RCTD_OLs + RCTD_OPCs)
+  
+  t.test(Glia ~ Condition, data = temp)
+  
+  plot.list[["DensityPlot_GlialContent"]] <- ggplot(temp, aes(.data[["Glia"]], fill = .data[["Condition"]])) + 
+    geom_density(alpha = 0.8, color = "white", linewidth = 0.5) +
+    annotate(geom = "text", x = 0.65, y = 8, label = "P < 2e-16", hjust = 0, vjust = 0.5, size = 3, lineheight = 0.7, color = "#3d3d3d") +
+    scale_fill_manual(values = col.list$Condition) + 
+    theme_mk +
+    remove_grid +
+    theme(legend.position = c(0.85, 0.75)) +
+    labs(x = "Per-spot glial proportion", y = "Density", fill = NULL, title = "Glial content in the cortex")
+  print(plot.list[["DensityPlot_GlialContent"]])
+}
+```
+
+```{r plot selected features}
+
+# Spatial Plot of selected MOL_DA features
+## ol.features <- c("Serpina3n", "Klk6", "C4b")
+plot.list[["Spatial_Serpina3n"]] <- (
+  spatial.seurat %>% SpatialPlot(
+      features = "Klk6", 
+      slot = "data", 
+      crop = F, 
+      alpha = 1, 
+      image.alpha = 0, 
+      pt.size.factor = 1.5, 
+      stroke = 0, 
+      ncol = 4, 
+      combine = T
+    ) & 
+      scale_fill_gradientn(colours = col.list$gradient_grey_to_red) & 
+      NoLegend() & 
+      NoAxes()
+) + plot_annotation(title = "Serpina3n", subtitle = "Han et al 2024")
+
+print(plot.list[["Spatial_Serpina3n"]])
+
+
+plot.list[["Scatter_Neurons_vs_Serpina3n"]] <- spatial.seurat %>% FeatureScatter(
+  feature1 = "RCTD_Neurons", 
+  feature2 = "Serpina3n", 
+  group.by = "BrainRegionShort", 
+  split.by = "Injury",
+  cols = col.list$cols_mono_short_v2,
+  pt.size = 1.5, 
+  span = 0.8, 
+  smooth = F, 
+  plot.cor = F, 
+  shuffle = T
+  ) & theme_mk & remove_grid
+print(plot.list[["Scatter_Neurons_vs_Serpina3n"]])
+
+
+```
+
+## Lesion surrounding areas
+
+```{r cortex-only spatial}
+ctx.spatial.seurat <- spatial.seurat %>% subset(
+  BrainRegionShort %in% roi)
+
+ctx.spatial.seurat %>% FeatureScatter(
+  feature1 = "RCTD_Neurons", 
+  feature2 = "Serpina3n", 
+  group.by = "BrainRegionShort", 
+  split.by = "Injury",
+  cols = col.list$cols_mono_short_v2,
+  pt.size = 1.5, 
+  span = 0.8, 
+  smooth = F, 
+  plot.cor = F, 
+  shuffle = T
+  ) & theme_mk & remove_grid
+```
+
+## Ref-based deconvolution: using C-Side on Zeng2023 ref
+Since the OLs locate in the lesion periphery, we re-state the question how / if they differ from OLs in regularly-ocurring fiber tracts.
+
+```{r select regions of interest and run C-Side}
+spatial.seurat %>% enh_vlnplot(
+  feature = "RCTD_OLs", 
+  grouping = "BrainRegionShort", 
+  colors = col.list$cols_mono_short_v2, 
+  compare_means = F, 
+  idents = c("FT", roi)
+  ) + NoLegend()
+
+# Prep the myRCTD results for C-SIDE
+exists("sections") # myRCTD.list names
+for(section in sections){
+  if(exists(section, where = myRCTD.list)){ # check if the section 
+    myRCTD.list[[section]]@config$doublet_mode <- myRCTD.list[[section]]@config$RCTDmode
+  }
+}
+
+# Define spots of interest
+image.of.interest <- "PT1.2"
+
+region.list <- list(
+  "Lesion" = Cells(spatial.seurat)[spatial.seurat$BrainRegionShort %in% c("ISD3p") & spatial.seurat$Image %in% image.of.interest],
+  "FiberTracts" = Cells(spatial.seurat)[spatial.seurat$BrainRegionShort %in% c("FT") & spatial.seurat$Image %in% image.of.interest]
+) 
+
+{
+  # Regions of interest turned into explanatory variable
+  roi.cside <- rep(0, length(region.list %>% unlist)) 
+  names(roi.cside) <- region.list %>% unlist # names as in spots
+  roi.cside[region.list[["Lesion"]]] <- 1 # Lesion spots get a 1
+}
+
+# Run C-Side for Oligodendrocytes
+myRCTD.list[["CSIDE_D3_OLs_FTvsLesion"]] <- run.CSIDE.single(
+  myRCTD = myRCTD.list[[image.of.interest]], 
+  explanatory.variable = roi.cside,
+  cell_types = "OLs", # celltypes of interest
+  cell_type_threshold = 20,
+  weight_threshold = 0.1,
+  doublet_mode = F ## doublet-mode was 'full'
+  )
+
+
+```
+
+```{r Explore C-Side results}
+cside.res <- myRCTD.list[["CSIDE_D7_OLs_FTvsLesion"]]@de_results$sig_gene_list$OLs
+
+cside.res %>% arrange(desc(log_fc)) %>% head(10)
+
+spatial.seurat %>% SpatialPlot(
+  features = "Serpina3n", 
+  slot = "data",
+  crop = F, 
+  images = sections, 
+  pt.size = 1.5, 
+  stroke = 0, 
+  alpha = 1, 
+  image.alpha = 0
+  ) & 
+  theme(legend.position = "none") &
+  viridis::scale_fill_viridis(
+    option = 'rocket', 
+    direction = -1) & 
+  labs(title = NULL)
+
+seurat %>% FeaturePlot(
+  features = "Tnfrsfa", label = T, reduction = "umap_harmony", slot = "data"
+)
+
+```
+
+
+# Scott et al 2024
+```{r path and lists}
+# ws
+if(!dir.exists("ws/MetanalysisScott2024")){dir.create("ws/MetanalysisScott2024")
+  ws <- "ws/MetanalysisScott2024"}else{ws <- "ws/MetanalysisScott2024"}
+
+# lists for saving
+plot.list <- list()
+result.list <- list()
+```
+
+```{r create separate seurat objects}
+# identify sections
+sections <- list.dirs(path = "data/Metadata/Scott2024/seurat_ready", 
+                      recursive = F, 
+                      full.names = F) # list the names of sections
+
+# individual seurat for each section
+seurat.list <- lapply(sections, \(section){
+  
+  data.path <- file.path("data", "Metadata", "Scott2024", "seurat_ready") # path to project data
+  final.path <- file.path(data.path, section) # path to section data
+  
+  # create spatial seurat object
+  seurat <- Seurat::Load10X_Spatial(
+    data.dir = final.path, 
+    filename = file.path("h5_files", "filtered_feature_bc_matrix.h5"), 
+    assay = "Spatial", 
+    slice = section, 
+    filter.matrix = F
+    )
+  
+  no.spots <- dim(seurat)[2] # the number of spots
+  
+  # add metadata
+  require(stringr)
+  if(section %>% str_detect(pattern = "Sham")) {
+    md <- data.frame(
+      "Condition" = rep("Sham", length.out = no.spots),
+      "Injury" = rep("Sham", length.out = no.spots),
+      "SectionName" = rep(section, length.out = no.spots)
+    )
+  } else {
+    md <- data.frame("Injury" = rep("MCAO", length.out = no.spots))
+    if (section == "2DPI") {
+      md %<>%
+        mutate(
+          Condition = rep("2DPI", length.out = no.spots),
+          SectionName = rep(section, length.out = no.spots)
+        )
+    } else if (section == "10DPI") {
+      md %<>%
+        mutate(
+          Condition = rep("10DPI", length.out = no.spots),
+          SectionName = rep(section, length.out = no.spots)
+        )
+    } else if (section == "21DPI") {
+      md %<>%
+        mutate(
+          Condition = rep("21DPI", length.out = no.spots),
+          SectionName = rep(section, length.out = no.spots)
+        )
+    } else {
+      message("Section name not found.")
+    }
+  }
+  
+  seurat %<>% AddMetaData(metadata = md)
+  
+  message(section, " was processed.")
+  return(seurat)
+}); names(seurat.list) <- sections
+```
+
+Some images are rotated weirdly. Let's adjust as necessary
+```{r Flip images as necessary}
+# Sham image
+seurat.list[["Sham"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "Sham") ## needs R90 rotation
+
+seurat.list[["Sham"]] %<>% 
+  rotateSeuratImage(
+    slide = "Sham", 
+    rotation = "R90"
+  )
+
+# 2DPI
+seurat.list[["2DPI"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "X2DPI")
+
+seurat.list[["2DPI"]] %<>% 
+  rotateSeuratImage(
+    slide = "X2DPI", 
+    rotation = "R90"
+  ) %>% 
+  rotateSeuratImage(
+    slide = "X2DPI", 
+    rotation = "Hf"
+  )
+
+# 10DPI
+seurat.list[["10DPI"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "X10DPI")
+
+seurat.list[["10DPI"]] %<>% 
+  rotateSeuratImage(
+    slide = "X10DPI", 
+    rotation = "180"
+  )
+
+# 21 DPI
+seurat.list[["21DPI"]] %>% 
+  SpatialPlot(
+    features = "nFeature_Spatial", 
+    images = "X21DPI")
+
+seurat.list[["21DPI"]] %<>% 
+  rotateSeuratImage(
+    slide = "X21DPI", 
+    rotation = "R90"
+  ) %>% 
+  rotateSeuratImage(
+    slide = "X21DPI", 
+    rotation = "Hf"
+  )
+```
+
+```{r combine seurat objects into one}
+# merge into one large seurat
+spatial.seurat <- merge(x = seurat.list[[1]], 
+                        y = seurat.list[2:length(seurat.list)], 
+                        add.cell.ids = names(seurat.list), 
+                        project = "Scott2024")
+
+# metadata as factors
+spatial.seurat@meta.data %<>% mutate(
+  Condition = factor(Condition, levels = c("Sham", "2DPI", "10DPI", "21DPI")), 
+  Injury = factor(Injury, levels = c("Sham", "MCAO")), 
+  SectionName = factor(SectionName, levels = c("Sham", "2DPI", "10DPI", "21DPI"))
+)
+
+# percent MT and RIB
+spatial.seurat %<>% PercentageFeatureSet(pattern = "^mt-", col.name = "percent.mt")
+spatial.seurat %<>% PercentageFeatureSet(pattern = "^Rpl|Rps", col.name = "percent.rib")
+```
+
+save Scott 2024 spatial seurat
+```{r save spatial seurat scott 2024}
+saveRDS(spatial.seurat, file = file.path("data", "Metadata", "spatialseurat_Scott2024.rds"))
+```
+
+## Processing Scott 2024
+(optional) read scott 2024 spatial seurat
+```{r optional read scott 2024 spatial seurat}
+# spatial.seurat <- readRDS(file = file.path("data", "Metadata", "spatialseurat_Scott2024.rds"))
+```
+
+Check QC
+```{r QC}
+# QC plot summary
+spatial_QC <- function(seu = spatial.seurat, groupings = "Condition"){
+  plots <- list()
+  
+  if(groupings %in% names(col.list)){
+    cols <- col.list[[groupings]]
+  } else {
+    cols <- col.list$Retro_TenDiscreet
+  }
+  
+  # Feature Scatters
+  plots[["Scatter_Count_Feature"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "nFeature_Spatial", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("RNA vs Gene content")
+  
+  plots[["Scatter_Count_percentMT"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "percent.mt", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("total RNA vs mtRNA content")
+  
+  plots[["Scatter_Count_percentRIB"]] <- (seu %>% FeatureScatter(
+    feature1 = "nCount_Spatial", 
+    feature2 = "percent.rib", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("total RNA vs ribRNA content")
+  
+  plots[["Scatter_Feature_percentMT"]] <- (seu %>% FeatureScatter(
+    feature1 = "nFeature_Spatial", 
+    feature2 = "percent.mt", 
+    group.by = groupings, 
+    pt.size = 0.1, 
+    cols = cols, 
+    shuffle = T)) + 
+    ggtitle("Gene count vs mtRNA content")
+  
+  # VlnPlot
+  plots[["Vln_Count_Feature_MT_RIB"]] <- (VlnPlot(
+    object = seu, 
+    features = c("nCount_Spatial", "nFeature_Spatial", "percent.mt", "percent.rib"), 
+    group.by = groupings, 
+    ncol = 1, 
+    combine = T, 
+    pt.size = 0, 
+    cols = cols)) & 
+    geom_boxplot(width=0.1, fill="white", outlier.size = 0.2) & # add boxplot inside the violins
+    xlab(NULL) &
+    ylab(NULL)
+  
+  # Spatial
+  plots[["Spatial_Count"]] <- (SpatialPlot(
+    object = seu, 
+    features = "nCount_Spatial", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = length(sections), 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_grey_to_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  plots[["Spatial_Feature"]] <- (SpatialPlot(
+    object = seu, 
+    features = "nFeature_Spatial", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = length(sections), 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_grey_to_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  plots[["Spatial_percentMT"]] <- (SpatialPlot(
+    object = seu, 
+    features = "percent.mt", 
+    crop = F, 
+    alpha = 1, 
+    image.alpha = 0, 
+    pt.size.factor = 1.5, 
+    stroke = 0, 
+    ncol = length(sections), 
+    combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+    plots[["Spatial_percentRIB"]] <- (SpatialPlot(
+      object = seu, 
+      features = "percent.rib", 
+      crop = F, 
+      alpha = 1, 
+      image.alpha = 0, 
+      pt.size.factor = 1.5, 
+      stroke = 0, 
+      ncol = length(sections), 
+      combine = T
+  )) & 
+    scale_fill_gradientn(colours = col.list$gradient_blue_yellow_red) & 
+    NoLegend() & 
+    NoAxes()
+  
+  wrapped_plots <- patchwork::wrap_plots(
+    plots, 
+    byrow = T, 
+    ncol = 4, 
+    nrow = 5, 
+    design = "ABCD
+              EFFF
+              EGGG
+              EHHH
+              EIII"
+  ) & theme_mk & NoLegend() 
+  
+  wrapped_plots <- wrapped_plots + 
+    plot_annotation(
+      title = "QC before filtering", 
+      subtitle = "Han2024") ## unify the plotting scheme
+  
+  return(wrapped_plots)
+}
+
+{
+  plot.list[["QC_before_filtering"]] <- spatial_QC(
+    seu = spatial.seurat, 
+    groupings = "SectionName")
+  
+  print(plot.list[["QC_before_filtering"]])
+  
+  plot.list[["QC_before_filtering"]] %>% ggsave_tiff(
+    plotname = "QCplots_Scott2024_prefiltering", ws_location = ws, height = 35, width = 35)
+}
+
+spatial.seurat$nCount_Spatial %>% summary
+spatial.seurat$nFeature_Spatial %>% summary
+```
+
+Filter
+```{r filter}
+spatial.seurat <- AddMetaData(
+  spatial.seurat, 
+  metadata = ifelse(
+    spatial.seurat@meta.data$nFeature_Spatial < 100 | spatial.seurat@meta.data$nCount_Spatial < 100, 
+    "LowFeature", 
+    "Normal"), 
+  col.name = "Highlight_Spots")
+
+spatial.seurat$Highlight_Spots %>% table ## only one spot with ultra low coverage
+
+spatial.seurat %>% SpatialPlot(
+  group.by = "Highlight_Spots", 
+  crop = F, 
+  image.alpha = 0, 
+  alpha = 1, 
+  ncol = 4) & NoLegend()
+
+# Filter
+{
+  spatial.seurat %<>% subset(nCount_Spatial > 100)
+  spatial.seurat %<>% subset(nFeature_Spatial > 100)
+  }
+```
+
+Normalization
+```{r lognormalization}
+{
+  # log normalization
+  spatial.seurat %<>% NormalizeData(normalization.method = "LogNormalize", verbose = T)
+  spatial.seurat %<>% ScaleData()
+  
+  # variable feature selection
+  spatial.seurat %<>% FindVariableFeatures(assay = "Spatial", nfeatures = 3000, verbose = T)
+  spatial.seurat %>% VariableFeaturePlot(assay = "Spatial")
+  
+  # Set default assay
+  DefaultAssay(spatial.seurat) <- "Spatial"
+}
+```
+
+PCA
+```{r pca}
+## PCA on the top variable features
+spatial.seurat %<>% RunPCA(assay = "Spatial", npcs = 50, verbose = T)
+spatial.seurat %>% PCAPlot(group.by = "SectionName", cols = col.list$Retro_TenDiscreet, raster = F, shuffle = T)
+```
+
+Select No. PCs
+```{r PCA QC}
+spatial.seurat %>% PC_var_explained()
+spatial.seurat %>% ElbowPlot(ndims = 50)
+spatial.seurat %>% DimHeatmap(dims = 1:15, cells = 700, balanced = TRUE)
+spatial.seurat %>% DimHeatmap(dims = 16:30, cells = 700, balanced = TRUE)
+
+nDims <- 20 # define the number of PCs to use
+spatial.seurat %<>% RunPCA(npcs = nDims, verbose = T)
+```
+
+UMAP
+```{r Run UMAP}
+{
+  spatial.seurat %<>% RunUMAP(
+    dims = 1:nDims, 
+    reduction = "pca",  
+    reduction.name = "umap_unintegrated",
+    verbose = T)
+  
+  spatial.seurat %>% DimPlot(
+    group.by = 'SectionName', 
+    reduction = "umap_unintegrated", 
+    cols = col.list$Retro_TenDiscreet, 
+    raster = F, 
+    combine = T, 
+    shuffle = T, 
+    label = T, 
+    label.box = T) + 
+    NoLegend() + 
+    NoAxes()
+}
+
+{
+  # Clustering analysis
+  spatial.seurat %<>% FindNeighbors(reduction = "pca", dims = 1:nDims)
+  spatial.seurat %<>% FindClusters(resolution = 1.2, cluster.name = "unintegrated_clusters")
+  
+  plot.list[["UMAP_noInt"]] <-
+    spatial.seurat %>%
+    DimPlot(
+      reduction = "umap_unintegrated",
+      group.by = "seurat_clusters",
+      split.by = 'Condition',
+      raster = F,
+      label = T,
+      label.size = 3,
+      shuffle = T
+    ) + NoLegend() + NoAxes()
+  
+  print(plot.list[["UMAP_noInt"]])
+  
+  plot.list[["SpatialPlot_noInt"]] <-
+    spatial.seurat %>%
+    SpatialPlot(
+      group.by = "seurat_clusters",
+      image.alpha = 0,
+      alpha = 1,
+      crop = F,
+      pt.size.factor = 1.5,
+      stroke = 0,
+      ncol = 4,
+      combine = T,
+      label = T,
+      label.size = 2
+    ) & NoLegend()
+  
+  print(plot.list[["SpatialPlot_noInt"]])
+  
+  wrap_plots(plot.list[c("UMAP_noInt", "SpatialPlot_noInt")],
+             ncol = 5, 
+             nrow = 2, 
+             byrow = T, 
+             design = "AABBB
+                       AABBB")
+}
+```
+
+```{r Join Layers}
+spatial.seurat %<>% JoinLayers()
+```
+
+Annotate Brain regions
+```{r annotate brain regions}
+spatial.seurat@active.ident %>% levels
+{
+  # Presence of canonical markers in seurat_clusters
+  ## load brain regions from in-house brain regions
+  brain.region.markers <- read_all_sheets(
+    file = file.path("data", "SupplementaryTable1_ControlSection_Markers_plusABA.xlsx")) %>% 
+    .[-length(.)] %>% # remove last list that includes comments rather than genes
+    lapply(\(x){x %>% pull(gene) %>% head(10)}) # pull top 10 markers per region
+  
+  ## scores for brain region markers
+  spatial.seurat %<>% AddModuleScore(
+    features = brain.region.markers, 
+    name = names(brain.region.markers))
+  
+  ## per cluster module values
+  plot.list[["VlnPlot_RegionCanonicalMarkers"]] <- spatial.seurat %>% VlnPlot(
+    features = spatial.seurat@meta.data %>% colnames %>% tail(n = length(brain.region.markers)),
+    pt.size = 0, 
+    group.by = "seurat_clusters", 
+    ncol = 3
+    )
+  
+  print(plot.list[["VlnPlot_RegionCanonicalMarkers"]])
+}
+
+{
+  select_cluster <- 12
+  highlight.spots <- Cells(spatial.seurat)[spatial.seurat@meta.data$seurat_clusters %in% select_cluster]
+  
+  spatial.seurat %>% SpatialPlot(
+    cells.highlight = highlight.spots, 
+    cols.highlight = c("red", "grey"), 
+    image.alpha = 0.1, 
+    alpha = 0.8, 
+    stroke = 0, 
+    crop = F, 
+    ncol = 4) & NoLegend()
+}
+
+# annotate clusters
+spatial.seurat@meta.data %<>% mutate("BrainRegion" = factor(case_when(
+  seurat_clusters == 0 ~ "Caudoputamen", 
+  seurat_clusters == 1 ~ "Isocortex L6", 
+  seurat_clusters == 2 ~ "Caudoputamen", 
+  seurat_clusters == 3 ~ "Hypothalamus",
+  seurat_clusters == 4 ~ "Caudoputamen",
+  seurat_clusters == 5 ~ "Hypothalamus", 
+  seurat_clusters == 6 ~ "Piriform area", 
+  seurat_clusters == 7 ~ "Thalamus",
+  seurat_clusters == 8 ~ "Isocortex L5", 
+  seurat_clusters == 9 ~ "Isocortex L5", 
+  seurat_clusters == 10 ~ "Ischemic area D3 periphery", 
+  seurat_clusters == 11 ~ "Fiber tracts", 
+  seurat_clusters == 12 ~ "Amygdalar area", 
+  seurat_clusters == 13 ~ "Isocortex L1-4", 
+  seurat_clusters == 14 ~ "GLS", 
+  seurat_clusters == 15 ~ "Isocortex L1-4", 
+  seurat_clusters == 16 ~ "Cortical subplate", 
+  seurat_clusters == 17 ~ "Ischemic area D7 periphery", 
+  seurat_clusters == 18 ~ "Isocortex L1-4", 
+  seurat_clusters == 19 ~ "Ischemic area D3 center", 
+  seurat_clusters == 20 ~ "Caudoputamen",
+  seurat_clusters == 21 ~ "Ventricle",
+  seurat_clusters == 22 ~ "Fiber tracts",
+  seurat_clusters == 23 ~ "Hypothalamus"
+)))
+
+spatial.seurat@meta.data %<>% mutate("BrainRegionShort" = factor(case_when(
+  seurat_clusters == 0 ~ "CP", 
+  seurat_clusters == 1 ~ "CTX6", 
+  seurat_clusters == 2 ~ "CP", 
+  seurat_clusters == 3 ~ "HY", 
+  seurat_clusters == 4 ~ "CP",
+  seurat_clusters == 5 ~ "HY", 
+  seurat_clusters == 6 ~ "PIR", 
+  seurat_clusters == 7 ~ "TH",
+  seurat_clusters == 8 ~ "CTX5", 
+  seurat_clusters == 9 ~ "CTX5", 
+  seurat_clusters == 10 ~ "ISD3p", 
+  seurat_clusters == 11 ~ "FT", 
+  seurat_clusters == 12 ~ "AMY", 
+  seurat_clusters == 13 ~ "CTX1-4", 
+  seurat_clusters == 14 ~ "GLS", 
+  seurat_clusters == 15 ~ "CTX1-4", 
+  seurat_clusters == 16 ~ "CS", 
+  seurat_clusters == 17 ~ "ISD7p", 
+  seurat_clusters == 18 ~ "CTX1-4", 
+  seurat_clusters == 19 ~ "ISD3c", 
+  seurat_clusters == 20 ~ "CP", 
+  seurat_clusters == 21 ~ "V",
+  seurat_clusters == 22 ~ "FT",
+  seurat_clusters == 23 ~ "HY"
+)))
+
+# set annotated regions as default ident
+Idents(spatial.seurat) <- "BrainRegionShort"
+spatial.seurat@meta.data$BrainRegionShort %>% levels()
+
+# Simplified brain areas
+spatial.seurat@meta.data %<>% 
+  mutate(BrainArea = factor(case_when(
+    BrainRegionShort == "AMY" ~ "Telencephalon", 
+    BrainRegionShort == "CP" ~ "Telencephalon", 
+    BrainRegionShort == "CS" ~ "Telencephalon", 
+    BrainRegionShort == "CTX1-4" ~ "Cortex", 
+    BrainRegionShort == "CTX5" ~ "Cortex", 
+    BrainRegionShort == "CTX6" ~ "Cortex", 
+    BrainRegionShort == "FT" ~ "Telencephalon", 
+    BrainRegionShort == "GLS" ~ "Cortex", 
+    BrainRegionShort == "HIP" ~ "Telencephalon", 
+    BrainRegionShort == "HY" ~ "Diencephalon", 
+    BrainRegionShort == "ISD3c" ~ "LesionCore", 
+    BrainRegionShort == "ISD3p" ~ "LesionPeriphery", 
+    BrainRegionShort == "ISD7p" ~ "LesionPeriphery", 
+    BrainRegionShort == "PIR" ~ "Telencephalon", 
+    BrainRegionShort == "TH" ~ "Diencephalon", 
+    BrainRegionShort == "V" ~ "Telencephalon" 
+  ), levels = c("Diencephalon", "Telencephalon", "Cortex", "LesionCore", "LesionPeriphery")))
+
+spatial.seurat@meta.data$BrainArea %>% table
+```
+
+```{r plot annotated regions}
+plot.list[["UMAP_BrainRegionShort"]] <- spatial.seurat %>% DimPlot(
+  reduction = "umap_unintegrated",
+  group.by = "BrainRegionShort", 
+  split.by = "Condition",
+  cols = col.list$cols_mono_short, 
+  shuffle = T, 
+  pt.size = 1.5, 
+  label = T
+  ) & 
+  NoLegend() & NoAxes() & ggtitle(NULL)
+
+
+plot.list[["SpatialPlot_BrainRegionShort"]] <- spatial.seurat %>% SpatialPlot(
+  group.by = "BrainRegionShort", 
+  cols = col.list$cols_mono_short,
+  image.alpha = 0, 
+  stroke = 0, 
+  ncol = 4, 
+  crop = F) & 
+  NoLegend()
+
+plot.list[["WrapPlot_Annotated"]] <- patchwork::wrap_plots(
+  plot.list[c("UMAP_BrainRegionShort", "SpatialPlot_BrainRegionShort")], 
+  ncol = 5, 
+  nrow = 2, 
+  design = "AABBB
+            AABBB"
+  ) + plot_annotation(title = "Re-analysis of Scott et al 2024", 
+                  subtitle = "Brain region clustering")
+
+print(plot.list[["WrapPlot_Annotated"]])
+
+# save the output plots
+plot.list[["WrapPlot_Annotated"]] %>% ggsave_tiff(
+  ws_location = ws, plotname = "WrapPlot_Scott2024_UMAP_Spatial_BrainRegions_annotated",
+  height = 15,
+  width = 30)
+```
+
+save annotated spatial seurat
+```{r save annotated Scott2024}
+saveRDS(object = spatial.seurat,
+        file = file.path("data", "Metadata", "spatialseurat_Scott2024_annotated.rds"))
+```
+
+## Ref-based Deconvolution RCTD: Zeng 2023
+load ref sc data
+```{r load ref sc data Zeng 2023}
+library(spacexr)
+
+# spatial Han 2024
+spatial.seurat <- readRDS(file = file.path("data", "Metadata", "spatialseurat_Scott2024_annotated.rds"))
+
+# single-cell ref Zeng 2023
+seurat <- readRDS(file = "data/Metadata/seurat_Zeng2023_qcfiltered_normalized_integrated_annotated.rds")
+```
+
+Single-cell reference object prep
+```{r Reference}
+# counts and metadata information
+counts <- seurat[["RNA"]]$counts
+meta_data <- data.frame("Barcodes" = Cells(seurat),
+                        "Cluster" = seurat$CellTypeClass, # annotated celltypes
+                        "nUMI" = colSums(counts))
+cell_types <- meta_data$Cluster %>% as.factor(); names(cell_types) <- meta_data$Barcodes # assign barcode names to the individual reference cells
+nUMI <- meta_data$nUMI; names(nUMI) <- meta_data$Barcodes # create named nUMI list
+
+### Create the Reference object
+reference <- Reference(counts, cell_types, nUMI, min_UMI = 300)
+
+## (optional) Examine reference object
+print(dim(reference@counts)) #observe Gene Expression matrix
+table(reference@cell_types) #number of occurences for each cell type
+```
+
+Spatial object prep
+```{r Spatial data prep}
+spatial.seurat@meta.data %>% glimpse
+spatial.seurat@meta.data$SectionName %>% table
+
+# SpatialPlot for a visual reminder
+spatial.seurat %>% SpatialPlot(
+  group.by = "BrainRegionShort", 
+  cols = col.list$cols_mono_short,
+  image.alpha = 0, 
+  stroke = 0, 
+  ncol = 4, 
+  crop = F) & 
+  NoLegend()
+
+# add an 'Image' metadata column with values matching names(spatial.seurat@images) for easier handling
+spatial.seurat@meta.data %<>% mutate("Image" = factor(case_when(
+  SectionName == "Sham" ~ "Sham", 
+  SectionName == "2DPI" ~ "X2DPI", 
+  SectionName == "10DPI" ~ "X10DPI", 
+  SectionName == "21DPI" ~ "X21DPI", 
+)))
+
+# individual sections are provided separately
+sections <- spatial.seurat@images %>% names
+sections <- c("Sham", "X2DPI", "X10DPI", "X21DPI") # reordering sections
+print(sections)
+
+{
+  # initialize data lists
+  counts <- list()
+  coords <- list()
+  nUMI.spatial <- list()
+  
+  # add data to the lists
+  for(i in sections){
+    # define the section-related variable
+    variable <- "Image"
+    
+    barcodes <- Cells(spatial.seurat)[spatial.seurat@meta.data[[variable]] %in% i]
+    
+    # section counts
+    counts[[i]] <- spatial.seurat[["Spatial"]]@layers$counts[, spatial.seurat@meta.data[[variable]] %in% i]
+    rownames(counts[[i]]) <- rownames(spatial.seurat)
+    colnames(counts[[i]]) <- barcodes
+    
+    # section coordinates
+    coords[[i]] <- data.frame(
+      "xcoord" = spatial.seurat@images[[i]]@coordinates$imagecol, 
+      "ycoord" = spatial.seurat@images[[i]]@coordinates$imagerow)
+    rownames(coords[[i]]) <- barcodes
+    
+    # total UMIs per spot
+    nUMI.spatial[[i]] <- colSums(counts[[i]])
+  }
+}
+```
+
+```{r SpatialRNA objects}
+puck <- list(); for(i in sections){
+  puck[[i]] <- SpatialRNA(coords[[i]], counts[[i]], nUMI.spatial[[i]])
+}
+
+# clean-up when puck is ready
+rm(nUMI.spatial, nUMI, counts, coords, barcodes, variable, i, meta_data)
+gc()
+```
+
+Run RCTD deconvolution
+```{r RCTD object and deconvo}
+# prepare RCTD object
+puck %>% glimpse # individual spatialRNA objects inside puck list
+sections ## names for the replicates to be analyzed
+
+# RCTD objects containing spatial and ref sc data
+myRCTD.list <- list()
+for(replicate in sections){
+  myRCTD.list[[replicate]] <- create.RCTD(
+    spatialRNA = puck[[replicate]], 
+    reference = reference, 
+    max_cores = 32)
+  }
+
+# define cell type levels
+celltypes_levels <- reference@cell_types %>% levels
+gc()
+
+# Run RCTD
+for(i in sections){
+  myRCTD.list[[i]] <- run.RCTD(
+    myRCTD.list[[i]], 
+    doublet_mode = "full")
+  }  ## deconvo itself; mode = "full" as we expect multiple cell types present in each spot.
+
+# save the output
+save(myRCTD.list, sections, celltypes_levels, 
+     file = file.path("data", "Metadata", "RCTDlist_spatialScott2024_scRefZeng2023_fullmode.Rdata"))
+saveRDS(myRCTD.list, file = file.path("data", "Metadata", "RCTDlist_spatialScott2024_scRefZeng2023_fullmode.Rds"))
+```
+
+Add RCTD results to the spatial object
+```{r add RCTD to spatial}
+if(myRCTD.list[[1]]@config$RCTDmode == "multi"){ # processing multi-mode results
+  message("RCTD ran in multi mode.")
+  subweight.list <- list()
+  for(i in names(myRCTD.list)){
+    len <- myRCTD.list[[i]]@results %>% length
+    subweight.list[[i]] <- lapply(1:len, \(ii){
+      myRCTD.list[[i]]@results[[ii]][["sub_weights"]]
+      })
+    names(subweight.list[[i]]) <- myRCTD.list[[i]]@spatialRNA@coords %>% rownames()
+  }; subweight.list <- purrr::flatten(subweight.list) # barcode-named list of doubles with deconvo proportions
+  
+  temp <- lapply(celltypes_levels, \(x){
+    var <- which(sapply(subweight.list, \(y){x %in% names(y)})) # which spots include given cell type
+    barcodes <- sapply(subweight.list[var], \(z){vals <- z[x]}) # barcode of the spot with cell type, extract celltype's value from that spot
+    names(barcodes) <- names(barcodes) %>% stringr::str_remove(pattern = paste(".", x, sep = "")) # remove the '.celltypename' from barcode names
+    notbarcodes <-  Cells(spatial.seurat)[!(Cells(spatial.seurat) %in% names(barcodes))] # barcodes for spots that do not contain given cell type
+    zeros <- rep(0, length(notbarcodes)); names(zeros) <- notbarcodes # zero vector of notbarcodes length
+    fullbarcodes <- c(barcodes, zeros) 
+    return(fullbarcodes)  
+  }); names(temp) <- celltypes_levels
+  
+  for(name in names(temp)){ # add the proportions to the spatial.seurat file
+    spatial.seurat %<>% AddMetaData(temp[[name]], col.name = paste0("RCTD_Celltypes_", name)) # add deconvoluted values as metadata to the seurat object
+  }
+  
+  rm(name, i, len)
+  
+} else if(myRCTD.list[[1]]@config$RCTDmode == "full"){
+  message("RCTD ran in full mode.")
+  result.list[["full_weightlist"]] <- lapply(myRCTD.list, \(i){
+    norm_weights <- i@results$weights %>% normalize_weights() %>% as.data.frame()
+    return(norm_weights)
+  }) %>% bind_rows()
+  
+  # reorder the weightlist by spatial seurat barcodes
+  result.list[["full_weightlist"]] %<>% slice(match(rownames(result.list[["full_weightlist"]]), spatial.seurat %>% Cells))
+  rctd_colnames <- paste0("RCTD_", colnames(result.list[["full_weightlist"]]))
+  spatial.seurat %<>% AddMetaData(
+    metadata = result.list[["full_weightlist"]], 
+    col.name = rctd_colnames
+    )
+  
+  # created missing values replace by zero
+  spatial.seurat@meta.data[rctd_colnames][is.na(spatial.seurat@meta.data[rctd_colnames])] <- 0
+} else {
+  message("RCTD ran in doublet mode. Processing code is missing.")
+}
+```
+
+rename images
+```{r rename scott section images}
+spatial.seurat@images %>% names
+names(spatial.seurat@images) <- c("10DPI", "21DPI", "2DPI", "Sham")
+sections <- c("Sham", "2DPI", "10DPI", "21DPI")
+```
+
+```{r RCTD SpatialPlot}
+# Spatial plots, rocket color gradient for all
+temp <- lapply(paste0(celltypes_levels), ## RCTD results
+               \(celltype_level) {
+                 celltype <- paste0("RCTD_", celltype_level)
+                 plot <- spatial.seurat %>% SpatialFeaturePlot(
+                   features = celltype,
+                   images = sections,
+                   crop = F,
+                   ncol = 4,
+                   pt.size.factor = 1.5,
+                   stroke = 0,
+                   alpha = 1,
+                   image.alpha = 0,
+                   combine = T
+                 ) &
+                   theme(legend.position = "none") &
+                   viridis::scale_fill_viridis(option = 'rocket',
+                                               direction = -1,
+                                               limits = c(0, 1)) &
+                   labs(title = NULL)
+                 
+                 plot <-
+                   plot + plot_annotation(title = NULL, subtitle = celltype_level)
+               })
+names(temp) <- paste0("SpatialPlot_", celltypes_levels)
+plot.list %<>% append(values = temp)
+
+print(plot.list$SpatialPlot_OLs)
+```
+
+save spatial with RCTD data
+```{r save spatial after deconvo}
+saveRDS(spatial.seurat, file = file.path("data", "Metadata",  "spatialseurat_Scott2024_annotated_rctdZeng2023.rds"))
+```
+
+

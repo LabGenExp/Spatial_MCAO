@@ -1,0 +1,175 @@
+---
+title: "1DP_13_spatial_seurat_for_publishing"
+author: "DanielZucha"
+date: "2024-07-07"
+output: html_document
+---
+
+Hello, 
+
+In this markdown we add metadata from across the analyses performed and adjust the coordinate system to display sections side-by-side available for interactive viewing on nygen's cellhub portal.
+
+To add:
+- Gene ontology processes
+- Deconvolution
+- L-R pair interactions (top 10)
+- Module scores for reactive glial populations
+
+```{r libraries}
+library(Seurat)
+library(SeuratWrappers)
+library(tidyverse)
+library(magrittr)
+library(patchwork)
+source("code/supporting_functions_MCAO.R")
+
+## options
+tidyverse_priority()
+options(Seurat.object.assay.version = "v5")
+options(future.globals.maxSize = 1e9)
+```
+
+paths and lists
+```{r path and lists}
+# paths
+
+# lists for saving
+plot.list <- list()
+result.list <- list()
+```
+
+Load data
+```{r load data}
+spatial.seurat <- readRDS(file = file.path("data", "seurat_spatial_1DP_06.Rds"))
+```
+
+Create x and y coordinate metadata
+```{r create x any y coord metadata}
+{
+  # extract the positions from the image coordinates
+  temp <- list()
+  for (i in names(spatial.seurat@images)) {
+    temp[[i]] <-
+      spatial.seurat@images[[i]]@coordinates %>%
+      mutate(Condition = i)
+  }
+  rm(i)
+  
+  # indent the row coordinate by increments
+  temp %<>%
+    bind_rows() %>%
+    rownames_to_column("barcode") %>%
+    select(barcode, imagerow, imagecol, Condition) %>%
+    mutate(
+      imagecol = case_when(
+        Condition == "Ctrl" ~ imagecol,
+        Condition == "1DPI" ~ imagecol + 8000,
+        Condition == "3DPI" ~ imagecol + 16000,
+        Condition == "7DPI" ~ imagecol + 24000
+      )
+    ) %>% 
+    mutate(
+      spatial_x = imagecol, 
+      spatial_y = -imagerow
+    ) %>% 
+    select(-Condition, - imagerow, - imagecol)
+  
+  # append back to spatial
+  spatial.seurat@meta.data %<>% 
+    right_join(
+      temp, 
+      by = "barcode") %>% 
+    select(orig.ident, nCount_Spatial, nFeature_Spatial, spatial_x, spatial_y, everything())
+}
+
+spatial.seurat %>% FeatureScatter(
+  feature1 = "spatial_x", 
+  feature2 = "spatial_y", 
+  group.by = "Condition", 
+  cols = col.list$Condition
+)
+```
+
+
+# Gene ontology processes
+```{r load GO data}
+# load gene ontology processes
+result.list[["Enrichments"]] <- 
+  read_all_sheets(file = file.path("results", "PNAS", "Tables", "Metascape_Parent_GOterms.xlsx"))
+```
+
+Add GO processes as module scores
+```{r add go as module scores}
+result.list[["Enrichments"]][["Sheet 1"]] %>% glimpse
+go_gene_list <- 
+  result.list[["Enrichments"]][["Sheet 1"]] %>% 
+  mutate(Symbols_split = strsplit(Symbols, ",")) %>% 
+  select(Process_Description, Symbols_split) %>% 
+  deframe()
+
+# add GO processes as module scores
+spatial.seurat %<>% 
+  AddModuleScore(
+    features = go_gene_list,
+    name = names(go_gene_list), 
+    assay = "Spatial"
+  )
+```
+
+# Deconvolution
+Deconvo already present in the loaded spatial_seurat_1DP_06.
+
+# Ligand-receptor interactions
+Add coexpression for the top 10 most LR pairs.
+```{r load ligand-receptor data}
+load(file = file.path("data", "ResultList_1DP_06.Rdata")) ## lesion periphery cci
+
+# extract the top 10 numerous LR pairs
+lr_pairs <-
+  result.list[["top_glia_lr_receivers_summary"]] %>%
+  group_by(LRpair) %>% 
+  summarise(total = sum(total_lr_co_exp_num), 
+            .groups = "drop") %>% 
+  select(LRpair) %>%
+  mutate(LRpair = as.character(LRpair)) %>%
+  separate(LRpair, into = c("Ligand", "Receptor"), sep = "-")
+
+# Compute their co-expression scores and append to the spatial seurat
+for(i in 1:nrow(lr_pairs)){
+  ligand <- lr_pairs[[i, "Ligand"]]
+  receptor <- lr_pairs[[i, "Receptor"]]
+  lr_name <- paste0("LR_", ligand, "_", receptor)
+  
+  spatial.seurat %<>% 
+    compute_coexpression(
+      ligand = ligand, 
+      receptor = receptor, 
+      pair_name = lr_name
+    )
+  message(paste0("LR pair ", lr_name, " was added."))
+}
+
+# Have a look at the LR pairs if you want
+spatial.seurat %>% 
+  SpatialPlot(
+    features = "LR_Cx3cl1_Itgb1", crop = T, image.alpha = 0
+  )
+```
+
+# Module scores for reactive glial populations
+```{r load and compute glial populations signatures}
+reac_glia_marker_list <- 
+  read_all_sheets(file = file.path("data", "SupplementaryTable6_sn_sc_Markers_GOanalysis.xlsx")) %>% 
+  .[c("SN_Ast_Reactive Astrocytes", "SN_MG_Reactive Microglia", "intSNSC_MOL_IFN", "intSNSC_MOL_DA1", "intSNSC_MOL_DA2")] %>% 
+  lapply(\(x){x %>% pull(gene) %>% head(15)})
+
+spatial.seurat %<>% 
+  AddModuleScore(
+    reac_glia_marker_list, 
+    name = names(reac_glia_marker_list)
+    )
+```
+
+# Save the output
+
+
