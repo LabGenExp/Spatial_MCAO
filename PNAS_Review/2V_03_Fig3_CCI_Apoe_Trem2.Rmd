@@ -149,7 +149,9 @@ CCI interactions with glia as receivers in the lesion periphery
 ```{r CCI interactions with glia as receivers}
 # stacked barplot by cell type sender
 top_glia_lr_senders_summary <- result.list[["top_glia_lr_senders_summary"]]
-plot.list[["Top_LRpairs_Glia_bySender"]] <- top_glia_lr_senders_summary %>% 
+
+plot.list[["Top_LRpairs_Glia_bySender"]] <- 
+  top_glia_lr_senders_summary %>% 
   ggplot(aes(x = LRpair, y = total_lr_co_exp_num, fill = celltype_sender)) + 
   geom_bar(stat = "identity") + 
   geom_text(aes(label = ifelse(total_lr_co_exp_num > 1000, total_lr_co_exp_num, "")), 
@@ -157,15 +159,16 @@ plot.list[["Top_LRpairs_Glia_bySender"]] <- top_glia_lr_senders_summary %>%
   scale_fill_manual(values = col.list$zeng.cols, 
                     guide = guide_legend(nrow = 4)) +
   labs(
-    title = NULL,
-    x = "Ligand-Receptor Pair",
+    title = "SpaTalk Prediction: Ligand-Expressing Cell Type",
+    x = NULL,
     y = "Total Interactions",
-    fill = "Cell Type Ligand"
+    fill = "Cell\nType"
   ) +
   theme_mk + 
   theme(legend.position = "bottom", 
         legend.justification = c(0.5, 0.5), 
-        axis.text.x = element_text(angle = 45, hjust = 1)) + 
+        axis.text.x = element_text(angle = 45, hjust = 1)
+        ) + 
   plot_layout_mm(width = 90, height = 70)
 
 
@@ -179,7 +182,8 @@ png_save_show(plot = plot.list[["Top_LRpairs_Glia_bySender"]],
 
 # stacked barplot by glial receiver
 top_glia_lr_receivers_summary <- result.list[["top_glia_lr_receivers_summary"]]
-plot.list[["Top_LRpairs_Glia_byReceiver"]] <- top_glia_lr_receivers_summary %>% 
+plot.list[["Top_LRpairs_Glia_byReceiver"]] <- 
+  top_glia_lr_receivers_summary %>% 
   ggplot(aes(x = LRpair, y = total_lr_co_exp_num, fill = celltype_receiver)) + 
   geom_bar(stat = "identity") + 
   geom_text(aes(label = ifelse(total_lr_co_exp_num > 1000, total_lr_co_exp_num, "")), 
@@ -187,24 +191,36 @@ plot.list[["Top_LRpairs_Glia_byReceiver"]] <- top_glia_lr_receivers_summary %>%
   scale_fill_manual(values = col.list$zeng.cols, 
                     guide = guide_legend(nrow = 1)) +
   labs(
-    title = NULL,
-    x = "Ligand-Receptor Pair",
+    title = "SpaTalk Prediction: Receptor-Expressing Cell Type",
+    x = NULL,
     y = "Total Interactions",
     fill = "Cell Type Receptor"
   ) +
   theme_mk +
-  theme(legend.position = c(0.7, 0.9), 
-        axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  theme(legend.position = "none", 
+        axis.text.x = element_blank()) + 
   plot_layout_mm(width = 90, height = 70)
 
 print(plot.list[["Top_LRpairs_Glia_byReceiver"]])
 png_save_show(plot = plot.list[["Top_LRpairs_Glia_byReceiver"]], 
               file = file.path(ws, "Top_LRpairs_Glia_byReceiver.png"), 
               dpi = 1000)
+
+
+plot.list[["wrap_plots_top_lrs"]] <-
+  patchwork::wrap_plots(
+    plot.list[c("Top_LRpairs_Glia_byReceiver", "Top_LRpairs_Glia_bySender")],
+    ncol = 1
+    )
+png_save_show(
+  plot = plot.list[["wrap_plots_top_lrs"]], 
+  file = file.path(ws, "WrapPlot_Top_LRpairs.png"), 
+  dpi = 1000)
+
 ```
 
 Number of Apoe-Trem2 interactions in ctrl cortex vs lesion periphery
-```{r CCI interactions with glia as receivers}
+```{r apoe trem2 interactions in ctrl and lesion periphery}
 apoe_trem_ctrl <- full_spatalk@lrpair %>% 
   filter(ligand == "Apoe" & receptor == "Trem2") %>% 
   mutate(Condition = rep("Ctrl", length.out = nrow(.)), 

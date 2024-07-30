@@ -31,8 +31,6 @@ options(future.globals.maxSize = 1e9)
 
 paths and lists
 ```{r path and lists}
-# paths
-
 # lists for saving
 plot.list <- list()
 result.list <- list()
@@ -55,7 +53,6 @@ Create x and y coordinate metadata
   }
   rm(i)
   
-  # indent the row coordinate by increments
   temp %<>%
     bind_rows() %>%
     rownames_to_column("barcode") %>%
@@ -63,9 +60,15 @@ Create x and y coordinate metadata
     mutate(
       imagecol = case_when(
         Condition == "Ctrl" ~ imagecol,
-        Condition == "1DPI" ~ imagecol + 8000,
-        Condition == "3DPI" ~ imagecol + 16000,
-        Condition == "7DPI" ~ imagecol + 24000
+        Condition == "1DPI" ~ imagecol + 10000,
+        Condition == "3DPI" ~ imagecol,
+        Condition == "7DPI" ~ imagecol + 10000
+      ), 
+      imagerow = case_when(
+        Condition == "Ctrl" ~ imagerow,
+        Condition == "1DPI" ~ imagerow,
+        Condition == "3DPI" ~ imagerow + 10000,
+        Condition == "7DPI" ~ imagerow + 10000,
       )
     ) %>% 
     mutate(
@@ -74,12 +77,15 @@ Create x and y coordinate metadata
     ) %>% 
     select(-Condition, - imagerow, - imagecol)
   
+  
   # append back to spatial
   spatial.seurat@meta.data %<>% 
     right_join(
       temp, 
       by = "barcode") %>% 
-    select(orig.ident, nCount_Spatial, nFeature_Spatial, spatial_x, spatial_y, everything())
+    select(barcode, orig.ident, nCount_Spatial, nFeature_Spatial, spatial_x, spatial_y, everything()) %>% 
+    mutate(Barcode = barcode) %>% 
+    column_to_rownames("Barcode")
 }
 
 spatial.seurat %>% FeatureScatter(
@@ -89,7 +95,6 @@ spatial.seurat %>% FeatureScatter(
   cols = col.list$Condition
 )
 ```
-
 
 # Gene ontology processes
 ```{r load GO data}
@@ -171,5 +176,118 @@ spatial.seurat %<>%
 ```
 
 # Save the output
+Save the resulting seurat
+```{r save seurat as for nygen}
+saveRDS(spatial.seurat, file = file.path("data", "spatial_seurat_1DP_13_nygen.rds"))
+```
 
+Save as input for nygen's ScarfWeb
+```{r save for scarfweb}
+library(SeuratDisk)
+library(Matrix)
+
+if(!dir.exists("data/scarfweb")){dir.create("data/scarfweb")
+  data_scarfweb <- "data/scarfweb"}else{data_scarfweb <- "data/scarfweb"}
+
+# save the count matrix
+writeMM(
+  obj = spatial.seurat@assays$Spatial@counts, 
+  file = file.path(data_scarfweb, "matrix.mtx")
+  )
+
+# save genes
+write.csv(
+  x = spatial.seurat@assays$Spatial@counts@Dimnames[[1]], 
+  file = file.path(data_scarfweb, "features.csv")
+)
+
+# save cells
+write.csv(
+  x = spatial.seurat@assays$Spatial@counts@Dimnames[[2]], 
+  file = file.path(data_scarfweb, "barcodes.csv")
+)
+
+# save metadata
+umap <- spatial.seurat@reductions$umap@cell.embeddings
+md <- spatial.seurat@meta.data %>%
+  mutate(cluster = DetailedRegionAnnoShort,
+         umap_x = umap[, 1],
+         umap_y = umap[, 2]) %>%
+  select(-Apoe_Trem2_lr_exp,-exp_Apoe,-exp_Trem2) %>% # remove unwanted columns
+  rename_with(.cols = starts_with("GO_"),
+              .fn = ~ paste0("GO_Apoe_Trem_downstream_", sub("GO_", "", .))) %>% # clarify the names
+  select(barcode,
+         cluster,
+         umap_x,
+         umap_y,
+         spatial_x,
+         spatial_y,
+         everything()) # reorder the columns
+
+write.csv(
+  x = md, 
+  file = file.path(data_scarfweb, "import_additional_metadata.csv"), 
+  quote = FALSE, 
+  row.names = FALSE
+)
+
+analysis_md <- md %>% 
+  mutate(x = umap_x, 
+         y = umap_y) %>%
+  select(barcode, cluster, x, y)
+
+write.csv(
+  x = analysis_md, 
+  file = file.path(data_scarfweb, "analysis_metadata.csv"), 
+  quote = FALSE, 
+  row.names = FALSE
+)
+
+
+# save umap embeddings
+write.csv(
+  spatial.seurat@reductions$umap@cell.embeddings, 
+  file = file.path(data_scarfweb, "umap.csv")
+)
+```
+
+Now, we move to python to create the scarfweb-compatible input data. This is done preferrably locally on the laptop, as server may not have a connection to open a web browser for the jupyter notebook.
+```{python Moving to python}
+# done in bash
+# create a h5 conda environment, activate it and open up a jupyter notebook
+# conda create -n h5 python=3.8.12 seaborn=0.11.2 h5py jupyterlab -c conda-forge
+# conda activate h5
+# jupyter lab
+
+import h5py
+from scipy.io import mmread
+from scipy.sparse import csr_matrix
+import pandas as pd
+import numpy as np
+
+in_file = csr_matrix(mmread("matrix.mtx").T)
+
+barcodes = pd.read_csv('barcodes.csv')['x'].values
+barcodes.shape
+
+features = pd.read_csv('features.csv')['x'].values
+features.shape
+
+assert in_file.shape == (barcodes.shape[0], features.shape[0])
+
+out = h5py.File("filtered_feature_matrix.h5", mode='w')
+
+g = out.create_group("matrix")
+
+g.create_dataset("shape", data=(features.shape[0], barcodes.shape[0]))
+g.create_dataset("barcodes", data=barcodes.astype(object), compression="gzip")
+g.create_dataset("indptr", data=in_file.indptr, compression="gzip")
+g.create_dataset("indices", data=in_file.indices, compression="gzip")
+g.create_dataset("data", data=in_file.data, compression="gzip")
+g.create_dataset("features/id", data=features.astype(object), compression="gzip")
+g.create_dataset("features/name", data=features.astype(object), compression="gzip")
+g.create_dataset("features/feature_type", data=np.array(["RNA" for x in range(len(features))]).astype(object), compression="gzip")
+
+out.close()
+```
 

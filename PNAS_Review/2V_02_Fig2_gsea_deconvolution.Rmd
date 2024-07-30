@@ -393,25 +393,29 @@ spatial.seurat %<>% AddModuleScore(features = list(chemokines), name = "chemokin
 
 feature <- "chemokines1"
 plot.list[["Spatial_Chemokines"]] <- 
-spatial.seurat %>%
-  SpatialPlot(features = feature,
-              images = sections, 
-              image.alpha = 0, 
-              stroke = 0, 
-              pt.size.factor = 2.2,
-              crop = TRUE, 
-              ncol = 4) &
+  spatial.seurat %>%
+  SpatialPlot(
+    features = feature,
+    images = sections,
+    image.alpha = 0.05,
+    stroke = 0,
+    pt.size.factor = 2.2,
+    crop = TRUE,
+    ncol = 4
+  ) &
   theme_mk &
   remove_grid &
   NoAxes() &
   theme(legend.position = "none",
         panel.border = element_blank()) &
-  scale_alpha_continuous(range = c(0.8, 1)) &
-  labs(title = NULL, subtitle = NULL) & 
-  scale_fill_gradientn(
-    colours = col.list$gradient_grey_to_red, 
-    limits = c(min(spatial.seurat@meta.data[[feature]]), max(spatial.seurat@meta.data[[feature]]))
-  )
+  scale_alpha_continuous(range = c(0.2, 1)) &
+  labs(title = NULL, subtitle = NULL) &
+  viridis::scale_fill_viridis(option = 'rocket',
+                              direction = -1,
+                              limits = c(
+                                min(spatial.seurat@meta.data[[feature]]),
+                                max(spatial.seurat@meta.data[[feature]])
+                              ))
 
 print(plot.list[["Spatial_Chemokines"]])
 
@@ -604,8 +608,6 @@ png_save_show(
 
 ```
 
-# Supplementary figures
-
 Individual cell type populations in cortex vs lesion
 ```{r vlnplot for individual coi}
 # choose celltypes of interest to plot
@@ -688,7 +690,7 @@ temp <- lapply("RCTD_Microglia", ## RCTD results
                    remove_grid &
                    NoAxes() & 
                    NoLegend() &
-                   theme(legend.position = "right", 
+                   theme(legend.position = "none", 
                          panel.border = element_blank()) & 
                    scale_alpha_continuous(range = c(0.2, 1)) &
                    viridis::scale_fill_viridis(option = 'rocket',
@@ -729,6 +731,7 @@ plot.list[["wrap_gliogenesis_chemokines_microglia"]] <-
       plot.list[["Spatial_Chemokines"]]),
     ncol = 1
   )
+print(plot.list[["wrap_gliogenesis_chemokines_microglia"]])
 
 png_save_show(
   plot = plot.list[["wrap_gliogenesis_chemokines_microglia"]],

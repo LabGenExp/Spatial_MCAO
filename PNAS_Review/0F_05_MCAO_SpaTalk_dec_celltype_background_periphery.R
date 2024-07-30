@@ -37,7 +37,7 @@ if(file.exists(file.path("data", "SpaTalk_RefZeng2023_MCAO_spatial_periphery.Rds
 } else {
   #load the data
   load(file.path("data", "1DP_05_MCAO_dec_celltype_background_periphery.Rdata"))
-  cat(crayon::silver(paste0("Objects were loaded. Initiating the deconvolution for single-cell resolution.", "\n")))
+  cat(crayon::silver(paste0("Objects were loaded. Initiating the decomposition to single-cell resolution.", "\n")))
   
   # Assign deconvolution data to the SpaTalk object
   dec.spatalk.list <- sections %>% lapply(\(x){
