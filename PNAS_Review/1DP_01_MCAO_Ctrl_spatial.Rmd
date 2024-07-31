@@ -12,9 +12,6 @@ Notes on using this script for analysis:
 - This markdown is made for an analysis in a chunk-by-chunk format, knitting will not work. 
 - The structure of this work assumes running an R project in a dedicated folder, e.g. named 'Spatial'. Inside, a structure of few subfolders is needed. One subfolder named 'orig' for the original data that are kept untouched for the entire analysis, only used for loading. Second, a subfolder named 'data' for the input .Rds files and others. Thirdly, a subfolder for named 'results' for the analysis outputs.
 
-I am personally sorry for this inconvenience. A more robust and reproducible pipeline is in the process of making. Thank you for your understanding.
-
-
 Files required to run the script: 
 - original files: "orig/seurat_2ndSpatial.rds", "Metanalysis/ABA regional markers/genes/"
 - intermediate, created files: "data/seurat_ctrl.Rds"
