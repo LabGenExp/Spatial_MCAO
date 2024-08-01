@@ -1121,102 +1121,6 @@ print(plot.list[["Scatter_Neurons_vs_Serpina3n"]])
 
 ```
 
-## Lesion surrounding areas
-
-```{r cortex-only spatial}
-ctx.spatial.seurat <- spatial.seurat %>% subset(
-  BrainRegionShort %in% roi)
-
-ctx.spatial.seurat %>% FeatureScatter(
-  feature1 = "RCTD_Neurons", 
-  feature2 = "Serpina3n", 
-  group.by = "BrainRegionShort", 
-  split.by = "Injury",
-  cols = col.list$cols_mono_short_v2,
-  pt.size = 1.5, 
-  span = 0.8, 
-  smooth = F, 
-  plot.cor = F, 
-  shuffle = T
-  ) & theme_mk & remove_grid
-```
-
-## Ref-based deconvolution: using C-Side on Zeng2023 ref
-Since the OLs locate in the lesion periphery, we re-state the question how / if they differ from OLs in regularly-ocurring fiber tracts.
-
-```{r select regions of interest and run C-Side}
-spatial.seurat %>% enh_vlnplot(
-  feature = "RCTD_OLs", 
-  grouping = "BrainRegionShort", 
-  colors = col.list$cols_mono_short_v2, 
-  compare_means = F, 
-  idents = c("FT", roi)
-  ) + NoLegend()
-
-# Prep the myRCTD results for C-SIDE
-exists("sections") # myRCTD.list names
-for(section in sections){
-  if(exists(section, where = myRCTD.list)){ # check if the section 
-    myRCTD.list[[section]]@config$doublet_mode <- myRCTD.list[[section]]@config$RCTDmode
-  }
-}
-
-# Define spots of interest
-image.of.interest <- "PT1.2"
-
-region.list <- list(
-  "Lesion" = Cells(spatial.seurat)[spatial.seurat$BrainRegionShort %in% c("ISD3p") & spatial.seurat$Image %in% image.of.interest],
-  "FiberTracts" = Cells(spatial.seurat)[spatial.seurat$BrainRegionShort %in% c("FT") & spatial.seurat$Image %in% image.of.interest]
-) 
-
-{
-  # Regions of interest turned into explanatory variable
-  roi.cside <- rep(0, length(region.list %>% unlist)) 
-  names(roi.cside) <- region.list %>% unlist # names as in spots
-  roi.cside[region.list[["Lesion"]]] <- 1 # Lesion spots get a 1
-}
-
-# Run C-Side for Oligodendrocytes
-myRCTD.list[["CSIDE_D3_OLs_FTvsLesion"]] <- run.CSIDE.single(
-  myRCTD = myRCTD.list[[image.of.interest]], 
-  explanatory.variable = roi.cside,
-  cell_types = "OLs", # celltypes of interest
-  cell_type_threshold = 20,
-  weight_threshold = 0.1,
-  doublet_mode = F ## doublet-mode was 'full'
-  )
-
-
-```
-
-```{r Explore C-Side results}
-cside.res <- myRCTD.list[["CSIDE_D7_OLs_FTvsLesion"]]@de_results$sig_gene_list$OLs
-
-cside.res %>% arrange(desc(log_fc)) %>% head(10)
-
-spatial.seurat %>% SpatialPlot(
-  features = "Serpina3n", 
-  slot = "data",
-  crop = F, 
-  images = sections, 
-  pt.size = 1.5, 
-  stroke = 0, 
-  alpha = 1, 
-  image.alpha = 0
-  ) & 
-  theme(legend.position = "none") &
-  viridis::scale_fill_viridis(
-    option = 'rocket', 
-    direction = -1) & 
-  labs(title = NULL)
-
-seurat %>% FeaturePlot(
-  features = "Tnfrsfa", label = T, reduction = "umap_harmony", slot = "data"
-)
-
-```
-
-
 # Scott et al 2024
 ```{r path and lists}
 # ws
@@ -2062,5 +1966,3 @@ save spatial with RCTD data
 ```{r save spatial after deconvo}
 saveRDS(spatial.seurat, file = file.path("data", "Metadata",  "spatialseurat_Scott2024_annotated_rctdZeng2023.rds"))
 ```
-
-
