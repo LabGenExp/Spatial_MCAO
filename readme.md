@@ -17,36 +17,36 @@ Our spatial dataset can be interactively explored at [Nygen portal](https://scar
 ## Chapter 1 - Ischemic brain injury severely disrupts cortical gene expression landscape
 We supply scripts on the processing and visualization for quality control of the control section, integration with ischemic sections, differential gene expression analysis and gene set enrichment.
 
-- [Processing and brain region QC for the control section.](1DP_01_MCAO_Ctrl_spatial.Rmd)
-- [Integration of ST data across batches.](1DP_02_MCAO_Integration.Rmd)
-- [Differential gene expression analysis and gene ontology.](1DP_03_MCAO_DEGs_and_GeneOntology.Rmd)
-- [Figure 1 Visualization](2V_01_Fig1_SpatialOverview.Rmd)
+- [Processing and brain region QC for the control section.](PNAS_Review/1DP_01_MCAO_Ctrl_spatial.Rmd)
+- [Integration of ST data across batches.](PNAS_Review/1DP_02_MCAO_Integration.Rmd)
+- [Differential gene expression analysis and gene ontology.](PNAS_Review/1DP_03_MCAO_DEGs_and_GeneOntology.Rmd)
+- [Figure 1 Visualization](PNAS_Review/2V_01_Fig1_SpatialOverview.Rmd)
 
 ## Chapter 2 - Ischemic lesion perturbs cortical processes and cellular composition
 To provide characterization of the perturbed state through the lense of molecular processes and cellular composition. We provide markdowns for processing and visualization for reference-based deconvolution.
 
-- [Reference-based deconvolution of ST data employing RCTD algorithm.](1DP_04_MCAO_deconvolution.Rmd)
-- [Figure 2 Visualization](2V_02_Fig2_gsea_deconvolution.Rmd)
+- [Reference-based deconvolution of ST data employing RCTD algorithm.](PNAS_Review/1DP_04_MCAO_deconvolution.Rmd)
+- [Figure 2 Visualization](PNAS_Review/2V_02_Fig2_gsea_deconvolution.Rmd)
 
 ## Chapter 3 - Cell-cell communication analysis identifies increased glia-oriented crosstalk in the lesion periphery
 To decompose the interactions between cells in the lesion periphery. We provide markdowns for processing and visualization the cell-cell interactions in the lesion peripheries and bulk RNA-seq validations.
 
-- [Cell-cell interactions in the entire cortex (for ctrl section) or full lesions.](1DP_05_MCAO_spatial_cell_cell_interactions_SpaTalk.Rmd)
-- [Cell-cell interactions for the lesion periphery.](1DP_06_MCAO_spatial_cell_cell_interactions_SpaTalk_periphery.Rmd)
-- [Validation using bulk data.](1DP_07_MCAO_bulk.Rmd)
-- [Figure 3 Visualization](2V_03_Fig3_CCI_Apoe_Trem2.Rmd)
+- [Cell-cell interactions in the entire cortex (for ctrl section) or full lesions.](PNAS_Review/1DP_05_MCAO_spatial_cell_cell_interactions_SpaTalk.Rmd)
+- [Cell-cell interactions for the lesion periphery.](PNAS_Review/1DP_06_MCAO_spatial_cell_cell_interactions_SpaTalk_periphery.Rmd)
+- [Validation using bulk data.](PNAS_Review/1DP_07_MCAO_bulk.Rmd)
+- [Figure 3 Visualization](PNAS_Review/2V_03_Fig3_CCI_Apoe_Trem2.Rmd)
 
 ## Chapter 4 & 5 - A spectrum of reactive glia emerges after ischemic brain injury
 To supplement the findings in ST data for presence of reactive glia, we performed single-nucleus profiling followed by an oligodendrocyte-enriched single-cell profiling. We provide markdowns for single-nucleus and single-cell processing, background RNA clean up, their integration, analysis, immunohistochemistry validation and visualization.
 
-- [SN processing](1DP_08_MCAO_snRNA_preprocessing.Rmd)
-- [SN background RNA removal (soupX)](1DP_09_MCAO_snRNA_soupX.Rmd)
-- [SC processing](1DP_10_MCAO_scRNA_preprocessing.Rmd)
-- [Integration and respective cell type analysis](1DP_11_MCAO_scsn.Rmd)
-- [Figure 4 & 5 visualization](2V_04_Fig04_05_MCAO_single_nucleus.Rmd)
+- [SN processing](PNAS_Review/1DP_08_MCAO_snRNA_preprocessing.Rmd)
+- [SN background RNA removal (soupX)](PNAS_Review/1DP_09_MCAO_snRNA_soupX.Rmd)
+- [SC processing](PNAS_Review/1DP_10_MCAO_scRNA_preprocessing.Rmd)
+- [Integration and respective cell type analysis](PNAS_Review/1DP_11_MCAO_scsn.Rmd)
+- [Figure 4 & 5 visualization](PNAS_Review/2V_04_Fig04_05_MCAO_single_nucleus.Rmd)
 
 ## Chapter 6 - Glial prominence in the ischemic lesion periphery is recapitulated in published ST datasets
 To robustify our findings, through analysis as well as number of replicates, we re-analyzed two publicaly available ischemic ST datasets: [Han et al 2024](https://www.science.org/doi/10.1126/scitranslmed.adg1323) and [Scott et al 2024](https://www.nature.com/articles/s41467-024-45821-y). We looked at the lesino separation into core-periphery, temporal and spatial localization of the expression patterns associated with glial accumulation, and reactive glia expression signatures.
 
-- [Spatial meta-analysis processing](1DP_12_MCAO_SpatialMetanalysis.Rmd)
-- [Figure 6 visualization](2V_05_Fig06_MCAO_Metanalysis.Rmd)
+- [Spatial meta-analysis processing](PNAS_Review/1DP_12_MCAO_SpatialMetanalysis.Rmd)
+- [Figure 6 visualization](PNAS_Review/2V_05_Fig06_MCAO_Metanalysis.Rmd)
