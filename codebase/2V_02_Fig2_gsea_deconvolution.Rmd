@@ -10,10 +10,6 @@ Hello,
 
 In this markdown we prepare the visual representations for the figure 2, summarizing the biological processes and cell types present in the lesioned areas. To develop a general understanding of altered processed, we submitted the regional markers genes for gene enrichment analysis using the online [MetaScape tool](https://metascape.org/gp/index.html#/main/step1). The enrichment was for performed for each lesional area (area + time) separately. The MetaScape allows a network for visualisation purposes, drawing the general scheme of events. To assess cell type distribution, we used RCTD algorithm ([spacexr package](https://github.com/dmcable/spacexr)) developed by Cable et al. Being a reference-based deconvolution algorithm, we reanalyzed the publicly available [Zeng et al 2023](http://www.ncbi.nlm.nih.gov/pubmed/37063847) single-cell stroke [dataset](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE227651) as it matched our experimental design and cell types of all plausible classes were included, i.e. neurons, glial cells, vascular or peripheral immune cells.
 
-Input files:
-- "Metascape_xx_UP.xlsx" # MetaScape excel sheets with gene set enrichment outputs
-- "seurat_spatial_integrated_ready_rctdZeng2023.rds" # Seurat spatial object with deconvo results 
-
 
 ```{r libraries}
 # daily libraries

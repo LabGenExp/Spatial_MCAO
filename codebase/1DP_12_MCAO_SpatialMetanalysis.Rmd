@@ -17,7 +17,7 @@ library(SeuratWrappers)
 library(tidyverse)
 library(magrittr)
 library(patchwork)
-source("code/supporting_functions_MCAO.R")
+source("Spatial_MCAO/codebase/supporting_functions_MCAO.R")
 
 ## options
 tidyverse_priority()

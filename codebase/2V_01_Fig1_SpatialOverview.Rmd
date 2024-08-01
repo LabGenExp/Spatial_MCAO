@@ -10,10 +10,6 @@ Hello,
 In this markdown we prepare the descriptive plots for out study focusing on the first week after the ischemic insult. First, we load the 3D MRI projections to see the lesion sizes and compute summary statistics determine the signficance of differences between lesion sizes. Having the spatial transcriptomics data, we look at the UMAP and clustering annotation being in line with brain's anatomy. This is best visualized with Spatial plots. The lesions introduce severe injury, which can be seen by decreased gene count or umi counts. But the genes found in the lesions show interesting time discrepancies, hinting at difference in lesion temporal resolution. This is well visible using the UpSet plot.
 
 
-Input files:
-- "data/seurat_spatial_integrated_ready.Rds" # Processed spatial data saved as Seurat object
-- "Markers_MCAO_SpatialSeurat_DetailedRegions.xlsx" # an excel sheet containing the statistics on differential gene expression for each brain region separately.
-
 ```{r libraries}
 # daily libraries
 library(tidyverse)

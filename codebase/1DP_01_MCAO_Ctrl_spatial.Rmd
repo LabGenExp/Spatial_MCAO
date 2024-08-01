@@ -5,36 +5,30 @@ date: "12/20/2022"
 output: html_document
 ---
 
-
-Markdown for the analysis of the control section.
+Hello, 
+Welcome to the markdown for the analysis of the control section.
 
 Notes on using this script for analysis:
 - This markdown is made for an analysis in a chunk-by-chunk format, knitting will not work. 
-- The structure of this work assumes running an R project in a dedicated folder, e.g. named 'Spatial'. Inside, a structure of few subfolders is needed. One subfolder named 'orig' for the original data that are kept untouched for the entire analysis, only used for loading. Second, a subfolder named 'data' for the input .Rds files and others. Thirdly, a subfolder for named 'results' for the analysis outputs.
 
-Files required to run the script: 
-- original files: "orig/seurat_2ndSpatial.rds", "Metanalysis/ABA regional markers/genes/"
-- intermediate, created files: "data/seurat_ctrl.Rds"
 
 === Essential chunks, load every time when running the script. ===
 Loading required libraries.
 ```{r libraries}
 library(Seurat); library(SeuratWrappers); library(dplyr); library(ggplot2); library(ggthemes); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr)
+
+source("Spatial_MCAO/codebase/supporting_functions_MCAO.R")
 ```
 
-Miscellaneous. Font, color scheme...
-```{r misc}
-library(showtext); font_add_google(name = "Open Sans", family = "OpenSans"); showtext_auto(); plot.font <- "OpenSans" # custom font for ggplots
+working space and lists
+```{r ws and lists}
+# ws
+if(!dir.exists("ws/Ctrl_spatial")){dir.create("ws/Ctrl_spatial")
+  ws <- "ws/Ctrl_spatial"}else{ws <- "ws/Ctrl_spatial"}
 
-## custom color list
-col.list <- list()
-col.list[["ctrl_cols"]] <- c("Isocortex L1-4" = "#EBCC2A", "Isocortex L5" = "#E58601", "Isocortex L6" = "#70ACE0", "GLS" = "#AD5248", "Lateral ventricle"  = "#DD8D29", "Hippocampus" = "#E6A0C4", "Fiber Tracts" = "#6F8E78", "Caudoputamen" = "#F8AFA8", "Thalamus" = "#7294D4", "Hypothalamus" =  "#E1AF00", "Amygdalar nuclei" = "#46ACC8", "Cortical subplate" = "#899DA4", "Piriform area" = "#C27D38")
-```
-
-Creating a subfolder for the results.
-```{r file folder loc}
-if(!dir.exists("results/SpatialFigures/")){dir.create("results/SpatialFigures/")}
-if(!dir.exists("results/SpatialFigures/Figure1")){dir.create("results/SpatialFigures/Figure1"); ws <- "results/SpatialFigures/Figure1"}else{ws <- "results/SpatialFigures/Figure1"}
+# lists
+plot.list <- list()
+result.list <- list()
 ```
 
 === Initial processing and annotation of the control section. ===
@@ -228,8 +222,13 @@ library(viridis); library(patchwork); library(stringr)
 
 ## brain regions
 ABAfiles <- list.files("Metanalysis/ABA regional markers/genes/")
-ABAregions <- ABAfiles  %>% str_replace(pattern = "ABAmarkers_", replacement = "ABA_") %>% str_remove(pattern = ".txt")
-SeuratRegions <- seurat_ctrl$BrainRegions %>% levels()
+ABAregions <-
+  ABAfiles %>% 
+  str_replace(pattern = "ABAmarkers_", replacement = "ABA_") %>% 
+  str_remove(pattern = ".txt")
+SeuratRegions <- 
+  seurat_ctrl$BrainRegions %>% 
+  levels()
 
 str_remove(ABAregions, pattern = "ABA_") %in% SeuratRegions # All TRUE? Good work!
 

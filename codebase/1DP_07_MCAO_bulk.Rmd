@@ -9,10 +9,6 @@ Markdown for the analysis of bulk RNA-Seq data, matching the experimental design
 
 The bulk data are to be kept in a separate folder named 'bulk', with two subfolders named 'data' and 'results'. 
 
-Essential input files:
-  - .xls files: "samples_MCAO.csv", "ORAlist_onMarkers_UP_IschemicRegions.xlsx"(optional, for comparison with spatial results)
-  - .count files: downloaded from GEO depository
-
 === Essential chunks. Always load. === 
 
 ```{r libraries}

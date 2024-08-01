@@ -23,48 +23,17 @@ Files:
 
 ```{r libraries}
 library(Seurat); library(SeuratWrappers); library(dplyr); library(ggplot2); library(tibble); library(openxlsx); library(RColorBrewer); library(magrittr); library(stringr)
-```
 
-```{r misc}
-library(showtext); font_add_google(name = "Open Sans", family = "OpenSans"); showtext_auto(); plot.font <- "OpenSans" # custom font for ggplots
-
-## custom color list
-col.list <- list()
-col.list[["ctrl_cols"]] <- c("Isocortex L1-4" = "#EBCC2A", "Isocortex L5" = "#E58601", "Isocortex L6" = "#70ACE0", "GLS" = "#AD5248", "Lateral ventricle"  = "#DD8D29", "Hippocampus" = "#E6A0C4", "Fiber Tracts" = "#6F8E78", "Caudoputamen" = "#F8AFA8", "Thalamus" = "#7294D4", "Hypothalamus" =  "#E1AF00", "Amygdalar nuclei" = "#46ACC8", "Cortical subplate" = "#899DA4", "Piriform area" = "#C27D38")
-
-col.list[["detailed_cols"]] <- c("Amygdalar area" = "#46ACC8", "Caudoputamen" = "#F8AFA8", "Cortical subplate" = "#899DA4", "Fiber tracts" = "#6F8E78", "GLS" = "#AD5248", "Hippocampus" = "#E6A0C4", "Hypothalamus" = "#E1AF00", "Ischemic area D1 center" = "#FAF1DB", "Ischemic area D1 periphery" = "#667776", "Ischemic area D3 center" = "#EE6C4D", "Ischemic area D3 periphery" = "#6A5491",  "Ischemic area D7 center" = "#19888C", "Ischemic area D7 periphery" =  "#485570" , "Isocortex L1-4" = "#EBCC2A", "Isocortex L5" = "#E58601", "Isocortex L6" = "#70ACE0", "Lateral isocortex L4/5" = "#ECB365", "Lateral isocortex L6" = "#293051", "Lateral ventricle" = "#DD8D29", "Pallidum" = "#034F1B", "Piriform area" = "#C27D38", "Thalamus" = "#7294D4")
-
-col.list[["cols_mono"]] <- c("Amygdalar area" = "#D0D0CA", 
-               "Caudoputamen" = "#A1A19C", 
-               "Cortical subplate" = "#B1B1AC", 
-               "Fiber tracts" = "#F0EFE2", 
-               "GLS" = "#A1A19C", 
-               "Hippocampus" = "#A1A19C", 
-               "Hypothalamus" = "#B1B1AC", 
-               "Ischemic area D1 center" = "#F8EFF1", 
-               "Ischemic area D1 periphery" = "#E7A9B1", 
-               "Ischemic area D3 center" = "#F1D2D4", 
-               "Ischemic area D3 periphery" = "#AF3039",  
-               "Ischemic area D7 center" = "#C65E6A", 
-               "Ischemic area D7 periphery" =   "#7B1113", 
-               "Isocortex L1-4" = "#B1B1AC", 
-               "Isocortex L5" = "#D0D0CA", 
-               "Isocortex L6" = "#C1C0BB", 
-               "Lateral isocortex L4/5" = "#C1C0BB", 
-               "Lateral isocortex L6" = "#D0D0CA", 
-               "Lateral ventricle" = "#B1B1AC", 
-               "Pallidum" = "#D0D0CA", 
-               "Piriform area" = "#C1C0BB", 
-               "Thalamus" = "#C1C0BB");
-
-col.list[["cols_mono_short"]] <- c("AMY" = "#D0D0CA", "CP" = "#A1A19C", "CS" = "#B1B1AC", "FT" = "#F0EFE2", "GLS" = "#A1A19C", "HIP" = "#A1A19C", "HY" = "#B1B1AC", "ISD1c" = "#F8EFF1", "ISD1p" = "#E7A9B1", "ISD3c" = "#F1D2D4", "ISD3p" = "#AF3039",  "ISD7c" = "#C65E6A", "ISD7p" =   "#7B1113", "CTX1-4" = "#B1B1AC", "CTX5" = "#D0D0CA", "CTX6" = "#C1C0BB", "lCTX4-5" = "#C1C0BB", "lCTX6" = "#D0D0CA", "LV" = "#B1B1AC", "PAL" = "#D0D0CA", "PIR" = "#C1C0BB", "TH" = "#C1C0BB")
-
-
+source("Spatial_MCAO/codebase/supporting_functions_MCAO.R")
 ```
 
 ```{r file folder loc}
-if(!dir.exists("results/SpatialFigures/")){dir.create("results/SpatialFigures/")}
-if(!dir.exists("results/SpatialFigures/Figure2")){dir.create("results/SpatialFigures/Figure2"); ws <- "results/SpatialFigures/Figure2"}else{ws <- "results/SpatialFigures/Figure2"}
+if(!dir.exists("ws/Integration")){dir.create("ws/Integration")
+  ws <- "ws/Integration"}else{ws <- "ws/Integration"}
+
+# lists
+plot.list <- list()
+result.list <- list()
 ```
 
 === Whole brain ===

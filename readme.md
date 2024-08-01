@@ -1,6 +1,10 @@
 # Spatiotemporal transcriptomic map of glial cell response in mouse model of acute brain ischemia
 
-Zucha et al. 2024
+Zucha et al. 2024, [Journal XYZ](insert_link_here)
+
+Tasks: 
+- clean up un-necessary code
+- fix references to the files and scripts
 
 
 Hello, 
