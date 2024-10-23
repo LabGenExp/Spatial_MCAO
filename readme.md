@@ -13,7 +13,7 @@ Our spatial dataset can be interactively explored at [Nygen portal](https://scar
 ## Data Availability
 
 - Raw sequencing data for both ST and single-nucleus / cell experiments are available for download at [GEO GSE233815](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE233815).
-- Seurat objects for the ST and single-nucleus / cell experiments are available for download at [Mendeley data](https://data.mendeley.com/preview/gnb2dsjms2?a=1e744314-eb08-4c66-abe5-e3885b8415c7).
+- Seurat objects for the ST and single-nucleus / cell experiments are available for download at [Mendeley data](https://data.mendeley.com/datasets/gnb2dsjms2/1).
 
 
 ## Chapter 1 - Ischemic brain injury severely disrupts cortical gene expression landscape
